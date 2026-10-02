@@ -18,6 +18,8 @@
   .\buddy-config.ps1 -WifiSsid "MyWiFi" -WifiPass "secret"
   .\buddy-config.ps1 -Wifi                             # hotspot name/password, IP
   .\buddy-config.ps1 -CharacterFromSd clawd            # install a character stored on the SD card
+  .\buddy-config.ps1 -UsageToken "sk-ant-oat01-..."    # Pro/Max usage (from `claude setup-token`)
+  .\buddy-config.ps1 -OtaCheck                         # check GitHub for a newer release
   .\buddy-config.ps1 -Set '{"theme":2,"pack":"retro","volume":70}'
   .\buddy-config.ps1 -Flash .\claudioscar-buddy-v1.0.0-amoled-1.8-v2.bin
   .\buddy-config.ps1 -Backup .\backup.bin
@@ -40,6 +42,8 @@ param(
   [string]$WifiPass = '',
   [switch]$Wifi,
   [string]$CharacterFromSd, # install /characters/<name> from the SD card
+  [string]$UsageToken,      # token from `claude setup-token` (Pro/Max usage); '' removes it
+  [switch]$OtaCheck,        # ask the buddy to check GitHub for an update now
   [string]$Set              # raw settings JSON, e.g. '{"theme":2,"pack":"retro","volume":70}'
 )
 
@@ -398,7 +402,8 @@ function Show-Menu {
 try {
   $hasWifiSsid = $PSBoundParameters.ContainsKey('WifiSsid')
   $any = $Status -or $Owner -or $PetName -or $Species -or $SyncTime -or $Character -or $Unpair -or
-         $Flash -or $Backup -or $SdUpload -or $hasWifiSsid -or $Wifi -or $Set -or $CharacterFromSd
+         $Flash -or $Backup -or $SdUpload -or $hasWifiSsid -or $Wifi -or $Set -or $CharacterFromSd -or
+         $PSBoundParameters.ContainsKey('UsageToken') -or $OtaCheck
   if (-not $any) { Show-Menu; return }
   if ($Backup)      { Save-Backup $Backup }
   if ($Flash)       { Install-Firmware $Flash; Start-Sleep 3 }
@@ -411,6 +416,17 @@ try {
   if ($SdUpload)    { Send-SdTree $SdUpload $SdPath }
   if ($hasWifiSsid) { Set-Wifi $WifiSsid $WifiPass }
   if ($Set)         { Set-Settings $Set }
+  if ($PSBoundParameters.ContainsKey('UsageToken')) {
+    $null = Invoke-Buddy @{ cmd = 'set'; usageToken = $UsageToken.Trim() }
+    if ($UsageToken) { Write-Host "Usage token saved; the buddy polls it once it is on your home WiFi." -ForegroundColor Green }
+    else { Write-Host "Usage token removed." -ForegroundColor Yellow }
+  }
+  if ($OtaCheck) {
+    $null = Invoke-Buddy @{ cmd = 'ota'; do = 'check' }
+    Start-Sleep -Seconds 8
+    $o = (Invoke-Buddy @{ cmd = 'net' }).ota
+    Write-Host "OTA: installed v$($o.current), state '$($o.state)'$(if ($o.latest) { ", latest v$($o.latest)" })$(if ($o.error) { " - $($o.error)" })"
+  }
   if ($CharacterFromSd) {
     $r = Invoke-Buddy @{ cmd = 'char_sd'; name = $CharacterFromSd } 60000
     if ($r.ok) { Write-Host "Character '$CharacterFromSd' installed from the SD card." -ForegroundColor Green }

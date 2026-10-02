@@ -45,7 +45,9 @@ static bool i2sInit() {
   cfg.mode = (i2s_mode_t)(I2S_MODE_MASTER | I2S_MODE_TX);
   cfg.sample_rate = AUDIO_SR;
   cfg.bits_per_sample = I2S_BITS_PER_SAMPLE_16BIT;
-  cfg.channel_format = I2S_CHANNEL_FMT_ONLY_LEFT;
+  // Stereo frames (same sample on L and R): the ES8311 on the V2 board
+  // ignores a left-only stream, and this is what Waveshare's demo does.
+  cfg.channel_format = I2S_CHANNEL_FMT_RIGHT_LEFT;
   cfg.communication_format = I2S_COMM_FORMAT_STAND_I2S;
   cfg.intr_alloc_flags = ESP_INTR_FLAG_LEVEL1;
   cfg.dma_buf_count = 4;
@@ -85,9 +87,16 @@ static bool es8311CodecInit() {
   return true;
 }
 
+// Write n mono samples as interleaved stereo.
 static void i2sOut(const int16_t* buf, int n) {
-  size_t written;
-  i2s_write(I2S_NUM_0, buf, n * sizeof(int16_t), &written, portMAX_DELAY);
+  int16_t st[256 * 2];
+  while (n > 0) {
+    int k = n > 256 ? 256 : n;
+    for (int i = 0; i < k; i++) st[2 * i] = st[2 * i + 1] = buf[i];
+    size_t written;
+    i2s_write(I2S_NUM_0, st, k * 2 * sizeof(int16_t), &written, portMAX_DELAY);
+    buf += k; n -= k;
+  }
 }
 
 // Sine tone with 4 ms linear attack/release; freq 0 = silence.
@@ -143,19 +152,20 @@ static void playWav(const char* path, uint32_t gen) {
       f.seek(f.position() + len + (len & 1));
     }
   }
+  Serial.printf("[aud] fmt=%u ch=%u bits=%u rate=%lu data=%lu\n", fmt, ch, bits, (unsigned long)rate, (unsigned long)dataLen);
   if (fmt != 1 || !dataLen || (bits != 8 && bits != 16) || ch < 1 || ch > 2 || !rate) { f.close(); return; }
 
   const int frameBytes = ch * bits / 8;
   static uint8_t in[1024];
   int16_t out[256];
   int outN = 0;
-  uint32_t pos = 0;                         // 16.16 fixed-point source frame index
-  const uint32_t step = (uint32_t)(((uint64_t)rate << 16) / AUDIO_SR);
+  uint64_t pos = 0;                         // 48.16 fixed-point source frame index (32-bit overflowed after 65536 frames)
+  const uint64_t step = ((uint64_t)rate << 16) / AUDIO_SR;
   uint32_t baseFrame = 0;                   // frame index of in[0]
   int inFrames = 0;
   uint32_t remaining = dataLen;
   while (gen == s_gen) {
-    uint32_t want = pos >> 16;
+    uint32_t want = (uint32_t)(pos >> 16);
     while (want >= baseFrame + inFrames) {
       baseFrame += inFrames;
       int rd = f.read(in, min<uint32_t>(sizeof(in) / frameBytes * frameBytes, remaining));
@@ -185,6 +195,7 @@ static void audioTask(void*) {
   AudioReq r;
   while (xQueueReceive(s_audQ, &r, portMAX_DELAY) == pdTRUE) {
     if (r.gen != s_gen) continue;
+    if (r.kind == AQ_WAV) Serial.printf("[aud] wav %s\n", r.path);
     if (r.kind == AQ_TONE) playTone(r.freq, r.dur, r.gen);
     else playWav(r.path, r.gen);
     if (uxQueueMessagesWaiting(s_audQ) == 0) {
@@ -215,7 +226,7 @@ bool hwAudioInit() {
 
   s_audQ = xQueueCreate(48, sizeof(AudioReq));
   if (!s_audQ) return false;
-  xTaskCreatePinnedToCore(audioTask, "audio", 6144, nullptr, 5, nullptr, tskNO_AFFINITY);
+  xTaskCreatePinnedToCore(audioTask, "audio", 8192, nullptr, 5, nullptr, tskNO_AFFINITY);
   sdInit();
   return true;
 }

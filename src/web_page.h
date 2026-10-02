@@ -70,11 +70,15 @@ button.small{padding:5px 10px;font-size:13px;margin:0 4px 0 0}
 
 <section><h2>WiFi</h2>
 <div class="sub" id="wst"></div>
-<label>Network</label><select id="nets"><option value="">— scan to list networks —</option></select>
-<button class="sec" onclick="scan()">Scan</button>
-<label>SSID</label><input id="ssid" maxlength="32">
-<label>Password</label><input id="pass" type="password" maxlength="64">
-<button onclick="wifi()">Connect</button><button class="sec" onclick="wifiForget()">Forget network</button>
+<a href="/wifi"><button>Configure WiFi →</button></a>
+</section>
+
+<section><h2>Claude usage (Pro/Max)</h2>
+<div class="grid" id="ust"></div>
+<label>Token — run <b>claude setup-token</b> on your PC and paste the result. Unofficial interface, use at your own risk.</label>
+<input id="utok" type="password" autocomplete="off" placeholder="sk-ant-oat01-…">
+<label>Refresh every</label><select id="upoll"><option value="60">1 min</option><option value="120">2 min</option><option value="300">5 min</option><option value="900">15 min</option></select>
+<button onclick="saveTok()">Save</button><button class="sec" onclick="act({do:'usage_poll'});setTimeout(load,4000)">Refresh now</button><button class="sec" onclick="if(confirm('Remove the token?'))post('/api/settings',{usageToken:''}).then(load)">Remove token</button>
 </section>
 
 <section><h2>Updates</h2>
@@ -82,6 +86,10 @@ button.small{padding:5px 10px;font-size:13px;margin:0 4px 0 0}
 <div class="chk"><input type="checkbox" id="otaAuto" onchange="post('/api/settings',{otaAuto:this.checked}).then(()=>toast('Saved'))">Install updates automatically</div>
 <button class="sec" onclick="act({do:'ota_check'});setTimeout(load,4000)">Check now</button>
 <button id="otaBtn" style="display:none" onclick="if(confirm('Install the update? The buddy will reboot.'))act({do:'ota_install'})">Install update</button>
+<label style="margin-top:14px">Manual update — upload a <b>claudioscar-buddy-ota-…bin</b> file (from the Releases page, matching your board)</label>
+<input type="file" id="otaFile" accept=".bin">
+<button class="sec" onclick="otaUpload()">Upload &amp; install</button>
+<div class="sub" id="otaUp"></div>
 </section>
 
 <section><h2>Device</h2>
@@ -108,6 +116,12 @@ function render(){
     ['IP',w.ip],['SD card',S.sd?'inserted':'none'],['Uptime',fmtUp(S.up)],
     ['Stats','approved '+S.stats.approved+' · denied '+S.stats.denied+' · level '+S.stats.level]];
   $('st').innerHTML=rows.map(r=>'<div>'+r[0]+'</div><div>'+esc(String(r[1]))+'</div>').join('');
+  const u=S.usage,now=S.now>1700000000?S.now:0;
+  const left=t=>{if(!t||!now||t<=now)return'';const r=t-now,d=Math.floor(r/86400),h=Math.floor(r%86400/3600),m=Math.floor(r%3600/60);return ' · resets in '+(d?d+'d '+h+'h':h+'h '+m+'m')};
+  const pc=v=>v<0?'—':Math.round(v)+'%';
+  $('ust').innerHTML=u.configured?[['Token','set ('+esc(u.hint||'')+')'],['5-hour',pc(u.h5)+left(u.h5reset)],['Weekly',pc(u.d7)+left(u.d7reset)],
+    ['Updated',u.ageSec<0?'never':u.ageSec+' s ago'+(u.via?' via '+u.via:'')]].concat(u.error?[['Error',esc(u.error)]]:[]).map(r=>'<div>'+r[0]+'</div><div>'+r[1]+'</div>').join(''):
+    '<div>Token</div><div>not set</div>';
   const o=S.ota;
   $('ost').textContent='Installed v'+o.current+(o.repo?' · releases from github.com/'+o.repo:'')+' · '+
     ({idle:'not checked yet (needs home WiFi)',uptodate:'up to date',available:'v'+o.latest+' available',installing:'installing… '+o.pct+'%',failed:'error: '+o.error}[o.state]||o.state);
@@ -121,7 +135,7 @@ function fill(){
   $('species').value=S.species;$('bright').value=S.bright;$('flag').value=S.flag;
   $('hud').checked=S.hud;$('led').checked=S.led;$('sound').checked=S.sound;
   $('theme').value=S.theme;$('volume').value=S.volume;$('angry').value=S.angry;
-  $('phrases').value=S.phrases.split('|').join('\n');$('ssid').value=S.wifi.ssid;$('otaAuto').checked=S.ota.auto;
+  $('phrases').value=S.phrases.split('|').join('\n');$('otaAuto').checked=S.ota.auto;$('upoll').value=String(S.usage.poll);
   ['bright','volume','angry'].forEach(k=>{$(k).oninput=lbl;});lbl();
 }
 function lbl(){$('bv').textContent=$('bright').value+'/4';$('vv').textContent=$('volume').value;$('av').textContent=$('angry').value}
@@ -133,14 +147,10 @@ async function save(){
     phrases:$('phrases').value.split('\n').map(s=>s.trim()).filter(Boolean).join('|')};
   try{await post('/api/settings',b);toast('Saved');load()}catch(e){toast('Error: '+e.message)}
 }
+async function saveTok(){const b={usagePoll:+$('upoll').value};if($('utok').value.trim())b.usageToken=$('utok').value.trim();
+  try{await post('/api/settings',b);$('utok').value='';toast('Saved');setTimeout(load,5000)}catch(e){toast('Error')}}
 async function act(b){try{await post('/api/action',b);toast('Done')}catch(e){toast('Error')}}
 function syncTime(){const d=new Date();act({do:'time',epoch:Math.floor(d/1000),tz:-d.getTimezoneOffset()*60})}
-async function scan(){toast('Scanning…');try{const l=await api('/api/scan');
-  $('nets').innerHTML='<option value="">— pick a network —</option>'+l.map(n=>'<option>'+esc(n.ssid)+'</option>').join('');
-  $('nets').onchange=()=>{if($('nets').value)$('ssid').value=$('nets').value}}catch(e){toast('Scan failed')}}
-async function wifi(){try{await post('/api/wifi',{ssid:$('ssid').value,pass:$('pass').value});
-  toast('Connecting… the buddy will show its new IP');}catch(e){toast('Error')}}
-async function wifiForget(){if(!confirm('Forget the saved network?'))return;await post('/api/wifi',{ssid:'',pass:''});toast('Forgotten')}
 async function sounds(){let m={};try{m=await api('/api/sounds')}catch(e){}
   $('snds').innerHTML=EV.map((e,i)=>'<div class="snd"><b>'+e+'</b><small>'+(m[e]?'custom ('+m[e]+')':'built-in')+'</small><span>'+
    '<button class="small sec" onclick="act({do:\'test\',ev:'+i+'})">▶</button>'+
@@ -156,5 +166,14 @@ async function lib(){let L={packs:[],chars:[]};try{L=await api('/api/library')}c
   $('cst').textContent='Installed: '+(S.char||'none')+(L.chars.length?' — tap one to install from the SD card (takes a few seconds).':' — no characters on the SD card.');
   $('chars').innerHTML=L.chars.map(n=>'<button class="sec" data-n="'+esc(n)+'" onclick="inst(this.dataset.n)">'+esc(n)+'</button>').join('')}
 async function inst(n){toast('Installing '+n+'…');try{await post('/api/action',{do:'char',name:n});toast('Installed '+n);await load(true);lib()}catch(e){toast('Install failed')}}
+function otaUpload(){const f=$('otaFile').files[0];if(!f){toast('Pick a .bin file first');return}
+  if(!/ota/i.test(f.name)&&!confirm('This file name does not look like an OTA image (claudioscar-buddy-ota-…bin). Upload anyway?'))return;
+  if(!confirm('Install '+f.name+'? The buddy will reboot.'))return;
+  const x=new XMLHttpRequest(),fd=new FormData();fd.append('fw',f);
+  x.upload.onprogress=e=>{if(e.lengthComputable)$('otaUp').textContent='Uploading… '+Math.round(e.loaded*100/e.total)+'%'};
+  x.onload=()=>{let r={};try{r=JSON.parse(x.responseText)}catch(e){}
+   $('otaUp').textContent=x.status==200?'Installed — rebooting, reload this page in ~15 s.':'Failed: '+(r.error||x.status)};
+  x.onerror=()=>{$('otaUp').textContent='Upload failed (connection lost).'};
+  x.open('POST','/api/ota/upload');x.send(fd)}
 load(true).then(lib);sounds();setInterval(load,5000);
 </script></body></html>)HTML";

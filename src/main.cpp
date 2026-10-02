@@ -179,7 +179,7 @@ static void sendCmd(const char* json) {
   bleWrite((const uint8_t*)json, n);
   bleWrite((const uint8_t*)"\n", 1);
 }
-const uint8_t INFO_PAGES = 7;
+const uint8_t INFO_PAGES = 8;
 const uint8_t INFO_PG_BUTTONS = 1;
 const uint8_t INFO_PG_CREDITS = 5;
 
@@ -508,6 +508,7 @@ bool checkShake() {
 #include "extras.h"
 #include "net.h"
 #include "ota.h"
+#include "usage.h"
 
 static void _infoHeader(const Palette& p, int& y, const char* section, uint8_t page) {
   spr.setTextColor(p.text, p.bg);
@@ -704,6 +705,54 @@ void drawInfo() {
       spr.setTextColor(p.textDim, p.bg);
       ln("enable in");
       ln("settings > wifi");
+    }
+
+  } else if (infoPage == 6) {
+    _infoHeader(p, y, "CLAUDE USAGE", infoPage);
+    if (!usageConfigured()) {
+      spr.setTextColor(p.textDim, p.bg);
+      ln("Pro/Max plan limits");
+      y += 4;
+      ln("1. on your PC run:");
+      spr.setTextColor(p.text, p.bg);
+      ln("   claude setup-token");
+      spr.setTextColor(p.textDim, p.bg);
+      ln("2. paste the token on");
+      ln("   the web page");
+      ln("   (Claude usage)");
+    } else {
+      uint32_t nowUtc = (uint32_t)time(nullptr);
+      auto window = [&](const char* name, float pct, uint32_t reset) {
+        spr.setTextColor(p.text, p.bg);
+        ln("%s", name);
+        if (pct < 0) { spr.setTextColor(p.textDim, p.bg); ln("  --"); y += 6; return; }
+        uint16_t col = pct >= 90 ? HOT : (pct >= 70 ? 0xFE60 : GREEN);
+        spr.setTextSize(2);
+        spr.setTextColor(col, p.bg);
+        spr.setCursor(SAFE_L, y); spr.printf("%d%%", (int)(pct + 0.5f));
+        spr.setTextSize(1);
+        int bx = SAFE_L + 56, bw = SAFE_R - bx;
+        spr.drawRect(bx, y + 3, bw, 9, p.textDim);
+        int fill = (int)((bw - 2) * (pct > 100 ? 100 : pct) / 100);
+        if (fill > 0) spr.fillRect(bx + 1, y + 4, fill, 7, col);
+        y += 20;
+        spr.setTextColor(p.textDim, p.bg);
+        if (reset && nowUtc > 1700000000UL && reset > nowUtc) {
+          uint32_t r = reset - nowUtc;
+          if (r >= 86400) ln("  resets in %lud %luh", (unsigned long)(r / 86400), (unsigned long)(r % 86400 / 3600));
+          else ln("  resets in %luh %02lum", (unsigned long)(r / 3600), (unsigned long)(r % 3600 / 60));
+        } else ln(" ");
+        y += 4;
+      };
+      window("5-HOUR", usage5h(), usage5hReset());
+      window("WEEKLY", usage7d(), usage7dReset());
+      if (usageError()[0]) {
+        spr.setTextColor(HOT, p.bg);
+        ln("%.28s", usageError());
+      } else if (!usageFresh()) {
+        spr.setTextColor(p.textDim, p.bg);
+        ln(netMode() == NET_STA ? "updating..." : "needs home WiFi");
+      }
     }
 
   } else {
@@ -1044,6 +1093,7 @@ void setup() {
     delay(1800);
   }
   otaLoadPrefs();
+  usageLoad();
   netBegin();
 
   Serial.printf("buddy: %s\n", buddyMode ? "ASCII mode" : "GIF character loaded");
@@ -1058,6 +1108,7 @@ void loop() {
   dataPoll(&tama);
   netLoop();
   otaLoop();
+  usageLoop();
   if (statsPollLevelUp()) { triggerOneShot(P_CELEBRATE, 3000); sfxPlay(SFX_CELEBRATE); }
   baseState = derive(tama);
 

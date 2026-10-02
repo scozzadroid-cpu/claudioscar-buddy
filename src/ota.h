@@ -143,13 +143,15 @@ static void _otaInstall() {
   int code = http.GET();
   if (code != 200) { char b[48]; snprintf(b, sizeof(b), "download failed (HTTP %d)", code); _otaFail(b); http.end(); characterInvalidate(); return; }
   int len = http.getSize();
+  Serial.printf("[ota] downloading %d bytes, heap %u\n", len, ESP.getFreeHeap());
   if (len <= 0 || !Update.begin(len, U_FLASH)) { _otaFail("not enough space for update"); http.end(); characterInvalidate(); return; }
 
   NetworkClient* s = http.getStreamPtr();
   static uint8_t buf[2048];
   int got = 0;
   uint32_t lastData = millis();
-  while (got < len && http.connected() && millis() - lastData < 20000) {
+  // Keep draining after the server closes: data may still sit in the TLS buffer.
+  while (got < len && (http.connected() || s->available()) && millis() - lastData < 20000) {
     size_t n = s->available();
     if (!n) { delay(2); continue; }
     n = s->readBytes(buf, min(n, sizeof(buf)));
@@ -166,7 +168,7 @@ static void _otaInstall() {
     characterInvalidate();
     return;
   }
-  Serial.println("[ota] update OK, rebooting");
+  Serial.printf("[ota] update OK (%d bytes), rebooting\n", got);
   drawCenteredText("done!", W / 2, H / 2 + 70, 2, GREEN, 0x0000);
   hwDisplayPush();
   delay(800);
@@ -206,4 +208,56 @@ void otaStatusJson(JsonObject o) {
   o["auto"] = _otaAuto;
   o["pct"] = _otaPct;
   o["error"] = _otaErr;
+}
+
+// ---------------------------------------------------------------- manual upload
+
+// POST /api/ota/upload (multipart, the app-only claudioscar-buddy-ota-*.bin).
+// The Update library rejects anything that isn't a valid app image for this
+// chip (magic byte, segment layout, SHA-256), so a wrong file can't brick it.
+static bool     _otaUpOk = false;
+static uint32_t _otaUpBytes = 0;
+static char     _otaUpErr[48] = "";
+
+void otaUploadChunk(HTTPUpload& up) {
+  if (up.status == UPLOAD_FILE_START) {
+    _otaUpOk = false; _otaUpBytes = 0; _otaUpErr[0] = 0;
+    Serial.printf("[ota] manual upload %s\n", up.filename.c_str());
+    hwAudioStop();
+    wake();
+    _otaState = OTA_INSTALLING;
+    _otaPct = 0;
+    if (!Update.begin(UPDATE_SIZE_UNKNOWN, U_FLASH)) { strcpy(_otaUpErr, "cannot start update"); return; }
+    _otaUpOk = true;
+    _otaDrawProgress("upload");
+  } else if (up.status == UPLOAD_FILE_WRITE) {
+    if (!_otaUpOk) return;
+    if (_otaUpBytes == 0 && up.currentSize && up.buf[0] != 0xE9) {
+      strcpy(_otaUpErr, "not a firmware image"); _otaUpOk = false; Update.abort(); return;
+    }
+    if (Update.write(up.buf, up.currentSize) != up.currentSize) {
+      strncpy(_otaUpErr, Update.errorString(), sizeof(_otaUpErr) - 1); _otaUpOk = false; Update.abort(); return;
+    }
+    _otaUpBytes += up.currentSize;
+    uint8_t pct = min<uint32_t>(99, _otaUpBytes / 25000);   // ~2.4 MB image -> rough %
+    if (pct != _otaPct) { _otaPct = pct; _otaDrawProgress("upload"); }
+  } else if (up.status == UPLOAD_FILE_END) {
+    if (_otaUpOk && !Update.end(true)) {
+      strncpy(_otaUpErr, Update.errorString(), sizeof(_otaUpErr) - 1); _otaUpOk = false;
+    }
+    Serial.printf("[ota] manual upload %lu bytes: %s\n", (unsigned long)_otaUpBytes, _otaUpOk ? "OK" : _otaUpErr);
+  } else if (up.status == UPLOAD_FILE_ABORTED) {
+    Update.abort(); _otaUpOk = false; strcpy(_otaUpErr, "upload aborted");
+  }
+  if (!_otaUpOk && up.status != UPLOAD_FILE_START) {
+    _otaState = OTA_FAILED;
+    strncpy(_otaErr, _otaUpErr, sizeof(_otaErr) - 1);
+  }
+}
+
+// Returns true when the uploaded image was accepted (caller reboots).
+bool otaUploadResult(const char** err) {
+  *err = _otaUpErr[0] ? _otaUpErr : "upload failed";
+  if (!_otaUpOk) characterInvalidate();
+  return _otaUpOk;
 }

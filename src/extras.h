@@ -17,7 +17,7 @@ struct ExtraSettings {
   uint8_t flag;       // FlagBadge shown in the top-right corner
 };
 
-static ExtraSettings _xs = { THEME_MEME, 60, 35, FLAG_PALESTINE };
+static ExtraSettings _xs = { THEME_MEME, 80, 50, FLAG_PALESTINE };
 
 static const char* DEFAULT_PHRASES =
   "porco dio!|dio cane!|porca madonna!|dio porco!|madonna maiala!|"
@@ -41,8 +41,8 @@ inline void extrasLoad() {
   Preferences pr;
   pr.begin("buddy", true);
   _xs.theme    = pr.getUChar("x_theme", THEME_MEME);
-  _xs.volume   = pr.getUChar("x_vol", 60);
-  _xs.angryPct = pr.getUChar("x_angry", 35);
+  _xs.volume   = pr.getUChar("x_vol", 80);
+  _xs.angryPct = pr.getUChar("x_angry", 50);
   _xs.flag     = pr.getUChar("x_flag", FLAG_PALESTINE);
   if (pr.isKey("x_spack")) pr.getString("x_spack", _soundPack, sizeof(_soundPack));
   if (pr.isKey("x_phr")) pr.getString("x_phr", _phrases, sizeof(_phrases));
@@ -256,4 +256,11 @@ inline void flagTap() {
   extrasSave();
   characterInvalidate();   // full repaint so a removed badge doesn't linger
   hwBeep(_xs.flag ? 1568 : 523, 120);
+}
+
+void sfxTest(uint8_t ev) {
+  Serial.printf("[sfx] test %u sound=%d theme=%u vol=%u sd=%d\n", ev, settings().sound, _xs.theme, _xs.volume, hwSdMounted());
+  if (ev == SFX_ANGRY) { angryOutburst(); return; }
+  hwAudioStop();
+  sfxPlay((SfxEvent)ev);
 }

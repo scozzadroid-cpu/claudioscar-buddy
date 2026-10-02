@@ -31,7 +31,10 @@ swears at you when you say no.
   install characters with one tap.
 - **Corner flag badge** (Palestine by default, Italy, or none). Secret
   toggle: tap the screen **7 times in a row**.
-- **USB configurator** for Windows: `tools/buddy-config.ps1`.
+- **Claude Pro/Max usage meter**: the buddy reads your 5-hour and weekly
+  plan limits by itself over WiFi (no PC) — see *Claude usage*.
+- **USB configurator** and **self-test** for Windows: `tools/buddy-config.ps1`,
+  `tools/buddy-test.ps1`.
 
 ## Install
 
@@ -80,13 +83,41 @@ In Claude Desktop: **Help → Troubleshooting → Enable Developer Mode**, then
    its password (generated on the first boot, then fixed).
 2. Join that network from your phone — the config page pops up (or open
    `http://192.168.4.1`).
-3. Optionally pick your home network under **WiFi**. Once connected, the page
-   lives at `http://claudioscar-buddy.local` (login `buddy` + the same
-   password). If the network goes away, the hotspot comes back on its own.
+3. Optionally tap **Configure WiFi →**, pick your home network and connect.
+   The hotspot then closes.
+
+**Reaching the page once it's on your WiFi:** from a phone/PC on the same
+network open `http://claudioscar-buddy.local`, or the IP shown on the
+buddy's **WIFI** info page (also printed by `buddy-config.ps1 -Wifi`). Log in
+with user `buddy` and the hotspot password. If the network goes away, the
+hotspot comes back on its own.
+
+If the page was opened by the phone's captive-portal popup, file uploads may
+be blocked there — open `http://192.168.4.1` in the normal browser instead.
 
 From the page you can set names, species, brightness, flag, sounds, angry
 phrases, WiFi, install SD characters, sync the clock, clear Bluetooth pairing,
 reboot and update.
+
+## Claude usage (Pro/Max)
+
+The **CLAUDE USAGE** info page (and the web page) show your plan's 5-hour and
+weekly utilization with reset countdowns, fetched directly by the buddy.
+
+1. On your PC run `claude setup-token` and copy the token it prints.
+2. Paste it on the web page under **Claude usage** — or over USB:
+   `.\tools\buddy-config.ps1 -UsageToken "sk-ant-oat01-..."`
+3. Connect the buddy to your home WiFi. It polls every 5 minutes (adjustable).
+
+It first asks the usage endpoint behind Claude Code's `/usage`, and falls back
+to a 1-token request whose `anthropic-ratelimit-unified-*` headers carry the
+same numbers (the approach of claude-usage-stick and Clawdmeter).
+
+> **Unofficial.** These are undocumented interfaces that may change or stop
+> working, and using a subscription token outside Claude Code may conflict
+> with Anthropic's terms. It's opt-in: nothing is sent unless you add a token.
+> The token is stored in the buddy's flash (not encrypted) and is never shown
+> back on the page.
 
 ## Updates (OTA)
 
@@ -94,6 +125,10 @@ The buddy checks this repo's latest release when it joins your WiFi and once
 a day. **Updates → Install update** on the web page flashes it; tick
 *Install updates automatically* to skip the button. Settings, characters and
 the hotspot password survive updates.
+
+**Manual update:** under **Updates** you can also upload a
+`claudioscar-buddy-ota-<env>.bin` from the Releases page yourself (handy
+without internet). Files that aren't a valid app image are rejected.
 
 Publishing an update: bump `custom_fw_version` in `platformio.ini`, build, and
 attach each environment's `.pio/build/<env>/firmware.bin` to a GitHub release
@@ -137,6 +172,10 @@ arguments for a menu, or:
 ```
 
 No API key is needed for any of this.
+
+`tools/buddy-test.ps1` drives the buddy with fake Claude traffic over USB
+(status, every sound, a fake session and a permission prompt you answer on
+the device) and reports PASS/FAIL.
 
 ## Controls
 

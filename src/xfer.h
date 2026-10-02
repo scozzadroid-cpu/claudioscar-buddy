@@ -128,6 +128,23 @@ inline bool xferCommand(JsonDocument& doc) {
     return true;
   }
 
+  if (strcmp(cmd, "sfx") == 0) {
+    // {"cmd":"sfx","ev":3} — play an event sound (debug / web "test").
+    extern void sfxTest(uint8_t);
+    sfxTest(doc["ev"] | 0);
+    _xAck("sfx", true);
+    return true;
+  }
+
+  if (strcmp(cmd, "ota") == 0) {
+    // {"cmd":"ota","do":"check"|"install"} — reply comes from "net"/"status" later.
+    extern void otaRequestCheck(); extern void otaRequestInstall();
+    const char* w = doc["do"] | "check";
+    if (!strcmp(w, "install")) otaRequestInstall(); else otaRequestCheck();
+    _xAck("ota", true);
+    return true;
+  }
+
   if (strcmp(cmd, "wifi") == 0) {
     // {"cmd":"wifi","ssid":"..","pass":".."} — empty ssid forgets the network.
     extern void netSetCredentials(const char*, const char*);

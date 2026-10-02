@@ -17,6 +17,7 @@
 #include <LittleFS.h>
 #include <SD_MMC.h>
 #include "web_page.h"
+#include "web_wifi.h"
 
 enum NetMode : uint8_t { NET_OFF, NET_CONNECTING, NET_STA, NET_AP };
 
@@ -44,6 +45,12 @@ void otaRequestCheck();
 void otaRequestInstall();
 void otaSetAuto(bool on);
 void otaStatusJson(JsonObject o);
+void otaUploadChunk(HTTPUpload& up);
+void usageSetToken(const char* t);
+void usageSetPoll(uint16_t sec);
+void usageRequestPoll();
+void usageStatusJson(JsonObject o);
+bool otaUploadResult(const char** err);
 
 inline NetMode netMode() { return _netMode; }
 inline const char* netApSsid() { return _apSsid; }
@@ -90,6 +97,15 @@ static void _netStopAp() {
   _dns.stop();
   WiFi.softAPdisconnect(true);
   WiFi.mode(WIFI_STA);
+}
+
+static void _netMdns() {
+  // Real UTC time for usage-reset countdowns (the RTC holds local time).
+  configTime(0, 0, "pool.ntp.org", "time.google.com");
+  static bool up = false;
+  if (up) return;            // the responder survives reconnects
+  up = MDNS.begin(NET_HOSTNAME);
+  if (up) MDNS.addService("http", "tcp", 80);
 }
 
 static void _netStartSta() {
@@ -140,6 +156,8 @@ static void _webStatus() {
   d["pack"] = soundPack();
   d["char"] = gifAvailable ? characterName() : "";
   otaStatusJson(d["ota"].to<JsonObject>());
+  usageStatusJson(d["usage"].to<JsonObject>());
+  d["now"] = (uint32_t)time(nullptr);
   d["sd"] = hwSdMounted();
   HwBattery hb = hwBattery();
   d["bat"]["pct"] = hb.pct;
@@ -189,6 +207,8 @@ void settingsApplyJson(JsonVariantConst in) {
   if (in["phrases"].is<const char*>()) angryPhrasesSet(in["phrases"]);
   if (in["flag"].is<int>())   x.flag = constrain(in["flag"].as<int>(), 0, FLAG_COUNT - 1);
   if (in["otaAuto"].is<bool>()) otaSetAuto(in["otaAuto"]);
+  if (in["usageToken"].is<const char*>()) usageSetToken(in["usageToken"]);
+  if (in["usagePoll"].is<int>()) usageSetPoll(in["usagePoll"].as<int>());
   extrasSave();
   characterInvalidate();
 }
@@ -201,19 +221,40 @@ static void _webSaveSettings() {
   _web.send(200, "application/json", "{\"ok\":true}");
 }
 
+// Asynchronous scan: ?start=1 (or no previous scan) kicks one off and
+// answers {"state":"scanning"}; poll until {"state":"done","nets":[...]}.
 static void _webScan() {
   if (!_webAuth()) return;
-  int n = WiFi.scanNetworks(false, false);
+  int n = WiFi.scanComplete();
+  if (n == WIFI_SCAN_RUNNING) { _web.send(200, "application/json", "{\"state\":\"scanning\"}"); return; }
+  if (_web.hasArg("start") || n < 0) {
+    WiFi.scanDelete();
+    WiFi.scanNetworks(true /* async */, false);
+    _web.send(200, "application/json", "{\"state\":\"scanning\"}");
+    return;
+  }
   JsonDocument d;
-  JsonArray a = d.to<JsonArray>();
-  for (int i = 0; i < n && i < 20; i++) {
+  d["state"] = "done";
+  JsonArray a = d["nets"].to<JsonArray>();
+  for (int i = 0; i < n; i++) {
+    String ssid = WiFi.SSID(i);
+    if (!ssid.length()) continue;            // hidden networks
+    bool dup = false;                        // same SSID on several APs: keep the strongest
+    for (JsonObject o : a) {
+      if (ssid == (const char*)o["ssid"]) { if (WiFi.RSSI(i) > (int)o["rssi"]) o["rssi"] = WiFi.RSSI(i); dup = true; break; }
+    }
+    if (dup || a.size() >= 25) continue;
     JsonObject o = a.add<JsonObject>();
-    o["ssid"] = WiFi.SSID(i);
+    o["ssid"] = ssid;
     o["rssi"] = WiFi.RSSI(i);
     o["open"] = WiFi.encryptionType(i) == WIFI_AUTH_OPEN;
   }
-  WiFi.scanDelete();
   _webSendJson(d);
+}
+
+static void _webWifiPage() {
+  if (!_webAuth()) return;
+  _web.send_P(200, "text/html", WEB_WIFI_PAGE);
 }
 
 static void _webSaveWifi() {
@@ -236,6 +277,8 @@ static void _webAction() {
     _applyJson(j, &tama);
   } else if (!strcmp(a, "ota_check")) {
     otaRequestCheck();
+  } else if (!strcmp(a, "usage_poll")) {
+    usageRequestPoll();
   } else if (!strcmp(a, "ota_install")) {
     otaRequestInstall();
   } else if (!strcmp(a, "char")) {
@@ -277,11 +320,13 @@ static void _webSoundUpload() {
     if (hwSdMounted()) { SD_MMC.mkdir("/sounds"); _upFile = SD_MMC.open(path, FILE_WRITE); }
     else { LittleFS.mkdir("/sounds"); _upFile = LittleFS.open(path, "w"); }
     _upOk = (bool)_upFile;
+    Serial.printf("[web] upload %s -> %s%s (%s)\n", up.filename.c_str(), hwSdMounted() ? "sd:" : "flash:", path, _upOk ? "ok" : "open failed");
   } else if (up.status == UPLOAD_FILE_WRITE) {
     if (_upFile && _upFile.write(up.buf, up.currentSize) != up.currentSize) _upOk = false;
   } else if (up.status == UPLOAD_FILE_END || up.status == UPLOAD_FILE_ABORTED) {
     if (_upFile) _upFile.close();
     if (up.status == UPLOAD_FILE_ABORTED) _upOk = false;
+    Serial.printf("[web] upload end %u bytes %s\n", (unsigned)up.totalSize, _upOk ? "ok" : "FAILED");
   }
 }
 static void _webSoundDone() {
@@ -368,6 +413,25 @@ static bool charInstallFromSd(const char* name) {
 
 bool charInstallFromSdPublic(const char* n) { return charInstallFromSd(n); }
 
+static bool _otaUpAuthed = false;
+static void _webOtaUploadChunk() {
+  HTTPUpload& up = _web.upload();
+  if (up.status == UPLOAD_FILE_START)
+    _otaUpAuthed = (_netMode == NET_AP) || _web.authenticate("buddy", _apPass);
+  if (_otaUpAuthed) otaUploadChunk(up);
+}
+static void _webOtaUploadDone() {
+  if (!_webAuth()) return;
+  const char* err;
+  if (!_otaUpAuthed || !otaUploadResult(&err)) {
+    JsonDocument d; d["ok"] = false; d["error"] = _otaUpAuthed ? err : "unauthorized";
+    _webSendJson(d, 400);
+    return;
+  }
+  _web.send(200, "application/json", "{\"ok\":true}");
+  _netRestart = true;   // reboot into the new image after the reply is sent
+}
+
 static void _webIndex() {
   if (!_webAuth()) return;
   _web.send_P(200, "text/html", WEB_PAGE);
@@ -389,11 +453,13 @@ static void _webBegin() {
   _web.on("/api/status", HTTP_GET, _webStatus);
   _web.on("/api/settings", HTTP_POST, _webSaveSettings);
   _web.on("/api/scan", HTTP_GET, _webScan);
+  _web.on("/wifi", HTTP_GET, _webWifiPage);
   _web.on("/api/wifi", HTTP_POST, _webSaveWifi);
   _web.on("/api/action", HTTP_POST, _webAction);
   _web.on("/api/sounds", HTTP_GET, _webSounds);
   _web.on("/api/library", HTTP_GET, _webLibrary);
   _web.on("/api/sound", HTTP_POST, _webSoundDone, _webSoundUpload);
+  _web.on("/api/ota/upload", HTTP_POST, _webOtaUploadDone, _webOtaUploadChunk);
   _web.onNotFound(_webNotFound);
   _web.begin();
   _webStarted = true;
@@ -403,13 +469,18 @@ static void _webBegin() {
 
 // One-line JSON for the USB configurator ({"cmd":"net"}).
 const char* netInfoJson() {
-  static char b[256];
-  snprintf(b, sizeof(b),
-    "{\"ack\":\"net\",\"ok\":true,\"mode\":\"%s\",\"ssid\":\"%s\",\"ip\":\"%s\",\"ap\":\"%s\",\"appw\":\"%s\"}\n",
-    _netMode == NET_STA ? "sta" : _netMode == NET_AP ? "ap" : _netMode == NET_CONNECTING ? "connecting" : "off",
-    _wSsid,
-    (_netMode == NET_STA ? WiFi.localIP() : WiFi.softAPIP()).toString().c_str(),
-    _apSsid, _apPass);
+  static char b[512];
+  JsonDocument d;
+  d["ack"] = "net";
+  d["ok"] = true;
+  d["mode"] = _netMode == NET_STA ? "sta" : _netMode == NET_AP ? "ap" : _netMode == NET_CONNECTING ? "connecting" : "off";
+  d["ssid"] = _wSsid;
+  d["ip"] = (_netMode == NET_STA ? WiFi.localIP() : WiFi.softAPIP()).toString();
+  d["ap"] = _apSsid;
+  d["appw"] = _apPass;
+  otaStatusJson(d["ota"].to<JsonObject>());
+  size_t n = serializeJson(d, b, sizeof(b) - 2);
+  b[n] = '\n'; b[n + 1] = 0;
   return b;
 }
 
@@ -461,8 +532,7 @@ inline void netLoop() {
     case NET_CONNECTING:
       if (linked) {
         _netMode = NET_STA;
-        MDNS.begin(NET_HOSTNAME);
-        MDNS.addService("http", "tcp", 80);
+        _netMdns();
         Serial.printf("[net] connected, http://%s.local  %s\n", NET_HOSTNAME, WiFi.localIP().toString().c_str());
       } else if (now - _netT0 > NET_CONNECT_MS) {
         Serial.println("[net] connect timeout -> hotspot");
@@ -481,8 +551,7 @@ inline void netLoop() {
         _netStopAp();
         _netMode = NET_STA;
         _netLostAt = 0;
-        MDNS.begin(NET_HOSTNAME);
-        MDNS.addService("http", "tcp", 80);
+        _netMdns();
         Serial.printf("[net] connected, http://%s.local  %s\n", NET_HOSTNAME, WiFi.localIP().toString().c_str());
       } else if (_wSsid[0] && WiFi.softAPgetStationNum() == 0 && now - _netLastRetry > NET_RETRY_MS) {
         // Retry the saved network only while nobody is on the hotspot:
