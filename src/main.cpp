@@ -129,7 +129,12 @@ static bool isFaceDown() {
   return az < -0.7f && fabsf(ax) < 0.4f && fabsf(ay) < 0.4f;
 }
 
-static void applyBrightness() { hwDisplayBrightness(brightLevel); }
+bool nightActive();
+uint8_t nightLevel();
+static void applyBrightness() {
+  if (nightActive()) hwDisplayBrightnessRaw(nightLevel());
+  else hwDisplayBrightness(brightLevel);
+}
 
 static void wake() {
   lastInteractMs = millis();
@@ -1101,6 +1106,12 @@ void setup() {
 
 void loop() {
   hwInputUpdate();
+  // Night mode: dim on schedule; any tap or key press lifts it until the next night.
+  if (nightActive() && (hwTouch().justPressed || hwBtnA().wasPressed || hwBtnB().wasPressed)) {
+    nightCancel();
+    if (!screenOff && !napping) applyBrightness();
+  }
+  if (nightTick() && !screenOff && !napping) applyBrightness();
   ;
   t++;
   uint32_t now = millis();

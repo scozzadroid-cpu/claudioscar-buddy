@@ -31,6 +31,9 @@ swears at you when you say no.
   install characters with one tap.
 - **Corner flag badge** (Palestine by default, Italy, or none). Secret
   toggle: tap the screen **7 times in a row**.
+- **Night mode**: from a time of your choice the screen drops to a very low
+  brightness (and optionally goes silent) until the morning — a tap brings
+  it back until the next night.
 - **Claude Pro/Max usage meter**: the buddy reads your 5-hour and weekly
   plan limits by itself over WiFi (no PC) — see *Claude usage*.
 - **USB configurator** and **self-test** for Windows: `tools/buddy-config.ps1`,
@@ -99,6 +102,15 @@ From the page you can set names, species, brightness, flag, sounds, angry
 phrases, WiFi, install SD characters, sync the clock, clear Bluetooth pairing,
 reboot and update.
 
+## Night mode
+
+Web page → **Night mode**: pick *From* / *Until*, the night brightness and
+whether sounds are muted. During that window the panel dims to the chosen
+level; a tap or a key press restores normal brightness until the next night.
+The schedule follows the buddy's clock, so sync it once (Device → *Sync
+clock*, or let Claude Desktop do it). Once the buddy is on your WiFi it keeps
+the clock right via NTP, using the timezone from the last sync.
+
 ## Claude usage (Pro/Max)
 
 The **CLAUDE USAGE** info page (and the web page) show your plan's 5-hour and
@@ -108,6 +120,10 @@ weekly utilization with reset countdowns, fetched directly by the buddy.
 2. Paste it on the web page under **Claude usage** — or over USB:
    `.\tools\buddy-config.ps1 -UsageToken "sk-ant-oat01-..."`
 3. Connect the buddy to your home WiFi. It polls every 5 minutes (adjustable).
+
+To check a token before giving it to the buddy, run
+`tools/usage-check.ps1` on your PC: it asks for the token (hidden), makes the
+same two requests and prints the result — the token stays on your machine.
 
 It first asks the usage endpoint behind Claude Code's `/usage`, and falls back
 to a 1-token request whose `anthropic-ratelimit-unified-*` headers carry the

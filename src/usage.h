@@ -158,7 +158,16 @@ static bool _uFetchHeaders() {
                        "\"messages\":[{\"role\":\"user\",\"content\":\".\"}]}");
   String u5 = http.header(H[0]), r5 = http.header(H[1]), u7 = http.header(H[2]), r7 = http.header(H[3]);
   http.end();
-  if (code <= 0) { char b[40]; snprintf(b, sizeof(b), "network error %d", code); _uSetErr(b); return false; }
+  if (code <= 0) {
+    char tlsErr[64] = "";
+    tls.lastError(tlsErr, sizeof(tlsErr));
+    char b[48];
+    snprintf(b, sizeof(b), "network error %d %s", code, tlsErr);
+    Serial.printf("[usage] connect failed %d: %s (internal largest %u)\n", code, tlsErr,
+                  (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL));
+    _uSetErr(b);
+    return false;
+  }
   if (!u5.length() && !u7.length()) {
     char b[48];
     if (code == 401 || code == 403) snprintf(b, sizeof(b), "token rejected (HTTP %d)", code);

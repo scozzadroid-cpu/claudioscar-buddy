@@ -47,6 +47,18 @@ button.small{padding:5px 10px;font-size:13px;margin:0 4px 0 0}
 <button onclick="save()">Save</button>
 </section>
 
+<section><h2>Night mode</h2>
+<div class="sub" id="nst"></div>
+<div class="chk"><input type="checkbox" id="nightOn">Dim the screen at night</div>
+<div style="display:flex;gap:10px"><div style="flex:1"><label>From</label><input type="time" id="nightStart"></div>
+<div style="flex:1"><label>Until</label><input type="time" id="nightEnd"></div></div>
+<label>Night brightness <span id="nlv"></span></label><input type="range" id="nightLevel" min="1" max="80">
+<div class="chk"><input type="checkbox" id="nightMute">Mute sounds at night</div>
+<div class="sub">A tap on the buddy (or a key) brings full brightness back until the next night.
+Needs the clock set: use <i>Sync clock</i> under Device once.</div>
+<button onclick="save()">Save</button>
+</section>
+
 <section><h2>Characters</h2>
 <div class="sub" id="cst"></div>
 <div id="chars"></div>
@@ -122,6 +134,7 @@ function render(){
   $('ust').innerHTML=u.configured?[['Token','set ('+esc(u.hint||'')+')'],['5-hour',pc(u.h5)+left(u.h5reset)],['Weekly',pc(u.d7)+left(u.d7reset)],
     ['Updated',u.ageSec<0?'never':u.ageSec+' s ago'+(u.via?' via '+u.via:'')]].concat(u.error?[['Error',esc(u.error)]]:[]).map(r=>'<div>'+r[0]+'</div><div>'+r[1]+'</div>').join(''):
     '<div>Token</div><div>not set</div>';
+  $('nst').textContent=!S.night?'':S.night.on?(S.night.active?'Night mode is on right now.':'Scheduled '+S.night.start+' – '+S.night.end+'.'):'Off.';
   const o=S.ota;
   $('ost').textContent='Installed v'+o.current+(o.repo?' · releases from github.com/'+o.repo:'')+' · '+
     ({idle:'not checked yet (needs home WiFi)',uptodate:'up to date',available:'v'+o.latest+' available',installing:'installing… '+o.pct+'%',failed:'error: '+o.error}[o.state]||o.state);
@@ -135,15 +148,15 @@ function fill(){
   $('species').value=S.species;$('bright').value=S.bright;$('flag').value=S.flag;
   $('hud').checked=S.hud;$('led').checked=S.led;$('sound').checked=S.sound;
   $('theme').value=S.theme;$('volume').value=S.volume;$('angry').value=S.angry;
-  $('phrases').value=S.phrases.split('|').join('\n');$('otaAuto').checked=S.ota.auto;$('upoll').value=String(S.usage.poll);
-  ['bright','volume','angry'].forEach(k=>{$(k).oninput=lbl;});lbl();
+  $('phrases').value=S.phrases.split('|').join('\n');$('otaAuto').checked=S.ota.auto;const n=S.night||{};$('nightOn').checked=n.on;$('nightStart').value=n.start;$('nightEnd').value=n.end;$('nightLevel').value=n.level;$('nightMute').checked=n.mute;$('upoll').value=String(S.usage.poll);
+  ['bright','volume','angry','nightLevel'].forEach(k=>{$(k).oninput=lbl;});lbl();
 }
-function lbl(){$('bv').textContent=$('bright').value+'/4';$('vv').textContent=$('volume').value;$('av').textContent=$('angry').value}
+function lbl(){$('bv').textContent=$('bright').value+'/4';$('vv').textContent=$('volume').value;$('av').textContent=$('angry').value;$('nlv').textContent=$('nightLevel').value}
 async function load(first){try{S=await api('/api/status');if(first)fill();render()}catch(e){$('sub').textContent='offline'}}
 async function save(){
   const b={pet:$('pet').value,owner:$('owner').value,species:+$('species').value,bright:+$('bright').value,
     flag:+$('flag').value,hud:$('hud').checked,led:$('led').checked,sound:$('sound').checked,
-    theme:+$('theme').value,pack:$('pack').value,volume:+$('volume').value,angry:+$('angry').value,
+    theme:+$('theme').value,pack:$('pack').value,nightOn:$('nightOn').checked,nightStart:$('nightStart').value,nightEnd:$('nightEnd').value,nightLevel:+$('nightLevel').value,nightMute:$('nightMute').checked,volume:+$('volume').value,angry:+$('angry').value,
     phrases:$('phrases').value.split('\n').map(s=>s.trim()).filter(Boolean).join('|')};
   try{await post('/api/settings',b);toast('Saved');load()}catch(e){toast('Error: '+e.message)}
 }

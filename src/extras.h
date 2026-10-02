@@ -15,9 +15,14 @@ struct ExtraSettings {
   uint8_t volume;     // 0..100
   uint8_t angryPct;   // chance (0..100) of an outburst on deny / shake
   uint8_t flag;       // FlagBadge shown in the top-right corner
+  bool     nightOn;    // night mode schedule enabled
+  uint16_t nightStart; // minutes after local midnight
+  uint16_t nightEnd;
+  uint8_t  nightLevel; // raw panel brightness at night (1..80)
+  bool     nightMute;  // no sounds while night mode is active
 };
 
-static ExtraSettings _xs = { THEME_MEME, 80, 50, FLAG_PALESTINE };
+static ExtraSettings _xs = { THEME_MEME, 80, 50, FLAG_PALESTINE, false, 23 * 60, 7 * 60, 6, true };
 
 static const char* DEFAULT_PHRASES =
   "porco dio!|dio cane!|porca madonna!|dio porco!|madonna maiala!|"
@@ -44,6 +49,11 @@ inline void extrasLoad() {
   _xs.volume   = pr.getUChar("x_vol", 80);
   _xs.angryPct = pr.getUChar("x_angry", 50);
   _xs.flag     = pr.getUChar("x_flag", FLAG_PALESTINE);
+  _xs.nightOn    = pr.getBool("n_on", false);
+  _xs.nightStart = pr.getUShort("n_start", 23 * 60) % 1440;
+  _xs.nightEnd   = pr.getUShort("n_end", 7 * 60) % 1440;
+  _xs.nightLevel = constrain(pr.getUChar("n_lvl", 6), 1, 80);
+  _xs.nightMute  = pr.getBool("n_mute", true);
   if (pr.isKey("x_spack")) pr.getString("x_spack", _soundPack, sizeof(_soundPack));
   if (pr.isKey("x_phr")) pr.getString("x_phr", _phrases, sizeof(_phrases));
   else strncpy(_phrases, DEFAULT_PHRASES, sizeof(_phrases) - 1);
@@ -62,6 +72,11 @@ inline void extrasSave() {
   pr.putUChar("x_vol", _xs.volume);
   pr.putUChar("x_angry", _xs.angryPct);
   pr.putUChar("x_flag", _xs.flag);
+  pr.putBool("n_on", _xs.nightOn);
+  pr.putUShort("n_start", _xs.nightStart);
+  pr.putUShort("n_end", _xs.nightEnd);
+  pr.putUChar("n_lvl", _xs.nightLevel);
+  pr.putBool("n_mute", _xs.nightMute);
   pr.putString("x_phr", _phrases);
   pr.putString("x_spack", _soundPack);
   pr.end();
@@ -125,8 +140,11 @@ static const _Mel MELODIES[SFX_COUNT] = {
 // /sd/sounds/<event>.wav, then LittleFS /sounds/<event>.wav. The SD-pack
 // theme reads /sd/soundpacks/<pack>/<event>.wav and falls back to the
 // meme melodies for events the pack doesn't cover.
+bool nightActive();
+
 inline void sfxPlay(SfxEvent ev) {
   if (!settings().sound || ev >= SFX_COUNT) return;
+  if (_xs.nightMute && nightActive()) return;
   char path[48];
   snprintf(path, sizeof(path), "/sd/sounds/%s.wav", SFX_NAMES[ev]);
   if (hwPlayWav(path)) return;
@@ -263,4 +281,41 @@ void sfxTest(uint8_t ev) {
   if (ev == SFX_ANGRY) { angryOutburst(); return; }
   hwAudioStop();
   sfxPlay((SfxEvent)ev);
+}
+
+// ---------------------------------------------------------------- night mode
+
+// Between nightStart and nightEnd (local time from the RTC) the panel drops
+// to nightLevel. A tap or key press cancels it until the next night; the
+// schedule needs a valid clock (synced from Claude Desktop, the web page,
+// or NTP once the timezone is known).
+static bool _nightCancelled = false;
+
+static bool _nightWindow() {
+  if (!_xs.nightOn || _xs.nightStart == _xs.nightEnd) return false;
+  if (_clkTm.Y < 2024) return false;           // clock never set
+  uint16_t m = _clkTm.H * 60 + _clkTm.M;
+  return _xs.nightStart < _xs.nightEnd ? (m >= _xs.nightStart && m < _xs.nightEnd)
+                                       : (m >= _xs.nightStart || m < _xs.nightEnd);
+}
+
+bool nightActive() { return _nightWindow() && !_nightCancelled; }
+uint8_t nightLevel() { return _xs.nightLevel; }
+
+// Call once per frame. Returns true when the night state flipped so the
+// caller re-applies brightness.
+inline bool nightTick() {
+  static bool was = false;
+  if (!_nightWindow()) _nightCancelled = false;  // re-arm for the next night
+  bool now = nightActive();
+  bool changed = now != was;
+  was = now;
+  return changed;
+}
+
+// Tap / key while dimmed: back to normal until the next night starts.
+inline bool nightCancel() {
+  if (!nightActive()) return false;
+  _nightCancelled = true;
+  return true;
 }

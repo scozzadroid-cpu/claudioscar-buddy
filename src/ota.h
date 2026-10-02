@@ -96,7 +96,9 @@ static void _otaCheck() {
   int code = http.GET();
   if (code != 200) {
     char b[64];
-    if (code < 0) snprintf(b, sizeof(b), "release check failed (%s)", http.errorToString(code).c_str());
+    char tlsErr[40] = "";
+    tls.lastError(tlsErr, sizeof(tlsErr));
+    if (code < 0) snprintf(b, sizeof(b), "check failed: %s %s", http.errorToString(code).c_str(), tlsErr);
     else snprintf(b, sizeof(b), "release check failed (HTTP %d)", code);
     _otaFail(b); http.end(); return;
   }

@@ -153,6 +153,17 @@ static void _webStatus() {
   d["angry"] = extraSettings().angryPct;
   d["phrases"] = angryPhrases();
   d["flag"] = extraSettings().flag;
+  {
+    char a[6], b[6];
+    snprintf(a, sizeof(a), "%02u:%02u", extraSettings().nightStart / 60, extraSettings().nightStart % 60);
+    snprintf(b, sizeof(b), "%02u:%02u", extraSettings().nightEnd / 60, extraSettings().nightEnd % 60);
+    d["night"]["on"] = extraSettings().nightOn;
+    d["night"]["start"] = a;
+    d["night"]["end"] = b;
+    d["night"]["level"] = extraSettings().nightLevel;
+    d["night"]["mute"] = extraSettings().nightMute;
+    d["night"]["active"] = nightActive();
+  }
   d["pack"] = soundPack();
   d["char"] = gifAvailable ? characterName() : "";
   otaStatusJson(d["ota"].to<JsonObject>());
@@ -177,6 +188,13 @@ static void _webStatus() {
   d["wifi"]["rssi"] = _netMode == NET_STA ? WiFi.RSSI() : 0;
   d["wifi"]["ap"] = _apSsid;
   _webSendJson(d);
+}
+
+// "23:30" -> minutes after midnight (fallback on bad input).
+static uint16_t _hhmm(const char* s, uint16_t fallback) {
+  int h, m;
+  if (!s || sscanf(s, "%d:%d", &h, &m) != 2 || h < 0 || h > 23 || m < 0 || m > 59) return fallback;
+  return h * 60 + m;
 }
 
 // Apply a settings object (web page or USB {"cmd":"set",...}); unknown keys ignored.
@@ -207,6 +225,11 @@ void settingsApplyJson(JsonVariantConst in) {
   if (in["phrases"].is<const char*>()) angryPhrasesSet(in["phrases"]);
   if (in["flag"].is<int>())   x.flag = constrain(in["flag"].as<int>(), 0, FLAG_COUNT - 1);
   if (in["otaAuto"].is<bool>()) otaSetAuto(in["otaAuto"]);
+  if (in["nightOn"].is<bool>())   x.nightOn = in["nightOn"];
+  if (in["nightStart"].is<const char*>()) x.nightStart = _hhmm(in["nightStart"], x.nightStart);
+  if (in["nightEnd"].is<const char*>())   x.nightEnd = _hhmm(in["nightEnd"], x.nightEnd);
+  if (in["nightLevel"].is<int>()) x.nightLevel = constrain(in["nightLevel"].as<int>(), 1, 80);
+  if (in["nightMute"].is<bool>()) x.nightMute = in["nightMute"];
   if (in["usageToken"].is<const char*>()) usageSetToken(in["usageToken"]);
   if (in["usagePoll"].is<int>()) usageSetPoll(in["usagePoll"].as<int>());
   extrasSave();
@@ -518,7 +541,49 @@ void netSetEnabled(bool on) {
   }
 }
 
+// mbedTLS in this core allocates from internal RAM only; with BLE, WiFi and
+// the GIF decoder running that leaves too little contiguous memory for a
+// handshake (HTTPClient then fails with -1). Route its allocations to PSRAM,
+// internal RAM only as a fallback.
+extern "C" int mbedtls_platform_set_calloc_free(void* (*)(size_t, size_t), void (*)(void*));
+static void* _tlsCalloc(size_t n, size_t sz) {
+  void* p = heap_caps_calloc(n, sz, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+  return p ? p : heap_caps_calloc(n, sz, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+}
+
+// Local timezone offset learned from the last time sync (browser, Claude
+// Desktop or USB), so NTP can keep the RTC right on its own.
+static int32_t _tzOff = 0;
+static bool    _tzKnown = false;
+void netRememberTz(int32_t off) {
+  if (_tzKnown && off == _tzOff) return;
+  _tzOff = off; _tzKnown = true;
+  Preferences pr;
+  pr.begin("buddy", false);
+  pr.putInt("x_tz", off);
+  pr.end();
+}
+
+static void _netNtpToRtc() {
+  static uint32_t last = 0;
+  if (!_tzKnown || (last && millis() - last < 3600000UL)) return;
+  time_t utc = time(nullptr);
+  if (utc < 1700000000) return;                 // NTP not answered yet
+  last = millis();
+  char j[48];
+  snprintf(j, sizeof(j), "{\"time\":[%lu,%ld]}", (unsigned long)utc, (long)_tzOff);
+  _applyJson(j, &tama);
+  Serial.println("[net] RTC set from NTP");
+}
+
 inline void netBegin() {
+  mbedtls_platform_set_calloc_free(_tlsCalloc, heap_caps_free);
+  {
+    Preferences pr;
+    pr.begin("buddy", true);
+    if (pr.isKey("x_tz")) { _tzOff = pr.getInt("x_tz", 0); _tzKnown = true; }
+    pr.end();
+  }
   _netLoadCreds();
   if (settings().wifi) netSetEnabled(true);
 }
@@ -540,7 +605,7 @@ inline void netLoop() {
       }
       break;
     case NET_STA:
-      if (linked) _netLostAt = 0;
+      if (linked) { _netLostAt = 0; _netNtpToRtc(); }
       else if (!_netLostAt) _netLostAt = now;
       else if (now - _netLostAt > NET_LOST_MS) { Serial.println("[net] link lost -> hotspot"); _netStartAp(); }
       break;

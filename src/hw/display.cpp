@@ -98,6 +98,8 @@ bool hwDisplayInit() {
 
 Arduino_Canvas* hwCanvas() { return s_canvas; }
 
+void hwDisplayBrightnessRaw(uint8_t v) { s_gfx->setBrightness(v); }
+
 void hwDisplayBrightness(uint8_t lvl) {
   if (lvl > 4) lvl = 4;
   s_gfx->setBrightness(BRIGHT_LUT[lvl]);

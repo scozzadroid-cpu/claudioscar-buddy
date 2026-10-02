@@ -18,5 +18,6 @@ constexpr int SAFE_H     = HW_H - 2 * SAFE_INSET;
 bool hwDisplayInit();
 void hwDisplayPush();
 void hwDisplayBrightness(uint8_t lvl_0_4);
+void hwDisplayBrightnessRaw(uint8_t v_0_255);   // night mode: below the 5-step LUT
 void hwDisplaySleep(bool off);
 Arduino_Canvas* hwCanvas();
