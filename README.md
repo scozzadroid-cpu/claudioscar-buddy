@@ -32,8 +32,10 @@ swears at you when you say no.
 - **Corner flag badge** (Palestine by default, Italy, or none). Secret
   toggle: tap the screen **7 times in a row**.
 - **Night mode**: from a time of your choice the screen drops to a very low
-  brightness (and optionally goes silent) until the morning — a tap brings
-  it back until the next night.
+  brightness (and optionally goes silent) until the morning — a tap wakes it
+  for a minute, then it goes back to sleep.
+- **Large text** option: info and pet pages in a 2x font with only the key
+  values, colour-coded.
 - **Claude Pro/Max usage meter**: the buddy reads your 5-hour and weekly
   plan limits by itself over WiFi (no PC) — see *Claude usage*.
 - **USB configurator** and **self-test** for Windows: `tools/buddy-config.ps1`,
@@ -106,7 +108,8 @@ reboot and update.
 
 Web page → **Night mode**: pick *From* / *Until*, the night brightness and
 whether sounds are muted. During that window the panel dims to the chosen
-level; a tap or a key press restores normal brightness until the next night.
+level; a tap or a key press brightens it for the chosen time (30 s – 5 min,
+every touch extends it), then it dims again until morning.
 The schedule follows the buddy's clock, so sync it once (Device → *Sync
 clock*, or let Claude Desktop do it). Once the buddy is on your WiFi it keeps
 the clock right via NTP, using the timezone from the last sync.
@@ -115,6 +118,12 @@ the clock right via NTP, using the timezone from the last sync.
 
 The **CLAUDE USAGE** info page (and the web page) show your plan's 5-hour and
 weekly utilization with reset countdowns, fetched directly by the buddy.
+
+- **Token only** (Claude Desktop not connected): the home screen becomes a
+  usage meter — 5-hour and weekly bars under the pet, like claude-usage-stick
+  / Clawdmeter.
+- **Connected over Bluetooth too**: the normal home screen stays, with a
+  compact `5h 42% wk 78%` strip in the top-left corner.
 
 1. On your PC run `claude setup-token` and copy the token it prints.
 2. Paste it on the web page under **Claude usage** — or over USB:

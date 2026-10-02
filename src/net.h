@@ -163,6 +163,10 @@ static void _webStatus() {
     d["night"]["level"] = extraSettings().nightLevel;
     d["night"]["mute"] = extraSettings().nightMute;
     d["night"]["active"] = nightActive();
+    d["night"]["wake"] = extraSettings().nightWake;
+  }
+  {
+    d["bigText"] = extraSettings().bigText;
   }
   d["pack"] = soundPack();
   d["char"] = gifAvailable ? characterName() : "";
@@ -230,6 +234,8 @@ void settingsApplyJson(JsonVariantConst in) {
   if (in["nightEnd"].is<const char*>())   x.nightEnd = _hhmm(in["nightEnd"], x.nightEnd);
   if (in["nightLevel"].is<int>()) x.nightLevel = constrain(in["nightLevel"].as<int>(), 1, 80);
   if (in["nightMute"].is<bool>()) x.nightMute = in["nightMute"];
+  if (in["nightWake"].is<int>())  x.nightWake = constrain(in["nightWake"].as<int>(), 10, 900);
+  if (in["bigText"].is<bool>())   x.bigText = in["bigText"];
   if (in["usageToken"].is<const char*>()) usageSetToken(in["usageToken"]);
   if (in["usagePoll"].is<int>()) usageSetPoll(in["usagePoll"].as<int>());
   extrasSave();

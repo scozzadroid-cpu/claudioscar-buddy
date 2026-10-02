@@ -540,7 +540,195 @@ void drawPasskey() {
   spr.print(b);
 }
 
+
+// ---------------------------------------------------------------- large text
+// "Large text" setting: 2x font, only the values that matter, colour-coded.
+static void tinyHeart(int x, int y, bool filled, uint16_t col);
+// Canvas is 184 px wide -> 14 characters per line at size 2.
+static int _bigY;
+static void _bigHdr(const Palette& p, const char* title, uint8_t page, uint8_t pages) {
+  _bigY = 72;
+  spr.setTextSize(1);
+  spr.setTextColor(p.textDim, p.bg);
+  spr.setCursor(SAFE_R - 24, _bigY); spr.printf("%u/%u", page + 1, pages);
+  spr.setTextColor(p.body, p.bg);
+  spr.setCursor(SAFE_L, _bigY); spr.print(title);
+  _bigY += 16;
+}
+static void _big(uint16_t c, uint16_t bg, const char* fmt, ...) {
+  char b[24]; va_list a; va_start(a, fmt); vsnprintf(b, sizeof(b), fmt, a); va_end(a);
+  int sz = strlen(b) <= 14 ? 2 : 1;           // long values (IPs, names) fall back to size 1
+  spr.setTextSize(sz);
+  spr.setTextColor(c, bg);
+  spr.setCursor(SAFE_L, _bigY); spr.print(b);
+  spr.setTextSize(1);
+  _bigY += sz == 2 ? 22 : 12;
+}
+static void _bigSmall(uint16_t c, uint16_t bg, const char* fmt, ...) {
+  char b[32]; va_list a; va_start(a, fmt); vsnprintf(b, sizeof(b), fmt, a); va_end(a);
+  spr.setTextSize(1);
+  spr.setTextColor(c, bg);
+  spr.setCursor(SAFE_L, _bigY); spr.print(b);
+  _bigY += 12;
+}
+static uint16_t _pctCol(float pct) { return pct >= 90 ? HOT : pct >= 70 ? 0xFE60 : GREEN; }
+static void _fmtLeft(char* out, size_t n, uint32_t reset) {
+  uint32_t now = (uint32_t)time(nullptr);
+  out[0] = 0;
+  if (!reset || now < 1700000000UL || reset <= now) return;
+  uint32_t r = reset - now;
+  if (r >= 86400) snprintf(out, n, "resets %lud%luh", (unsigned long)(r / 86400), (unsigned long)(r % 86400 / 3600));
+  else snprintf(out, n, "resets %luh%02lum", (unsigned long)(r / 3600), (unsigned long)(r % 3600 / 60));
+}
+
+// Home screen with only a usage token (no Claude Desktop link): the lower
+// panel becomes a usage meter, like claude-usage-stick / Clawdmeter.
+static void drawUsageHome() {
+  const Palette& p = characterPalette();
+  spr.fillRect(0, 140, W, H - 140, p.bg);
+  int y = 144;
+  auto row = [&](const char* lbl, float pct, uint32_t reset) {
+    uint16_t col = pct < 0 ? p.textDim : _pctCol(pct);
+    spr.setTextSize(1);
+    spr.setTextColor(p.textDim, p.bg);
+    spr.setCursor(SAFE_L, y + 5); spr.print(lbl);
+    spr.setTextSize(2);
+    spr.setTextColor(col, p.bg);
+    spr.setCursor(SAFE_L + 30, y);
+    if (pct < 0) spr.print("--"); else spr.printf("%d%%", (int)(pct + 0.5f));
+    int bx = SAFE_L + 86, bw = SAFE_R - bx;
+    spr.drawRect(bx, y + 3, bw, 10, p.textDim);
+    if (pct > 0) spr.fillRect(bx + 1, y + 4, (int)((bw - 2) * (pct > 100 ? 100 : pct) / 100), 8, col);
+    char left[24]; _fmtLeft(left, sizeof(left), reset);
+    spr.setTextSize(1);
+    spr.setTextColor(p.textDim, p.bg);
+    spr.setCursor(SAFE_L + 30, y + 19); spr.print(left);
+    y += 34;
+  };
+  row("5h", usage5h(), usage5hReset());
+  row("week", usage7d(), usage7dReset());
+  char t[24];
+  if (_clkTm.Y >= 2024) snprintf(t, sizeof(t), "%02u:%02u%s", _clkTm.H, _clkTm.M, usageFresh() ? "" : "  (stale)");
+  else snprintf(t, sizeof(t), "%s", usageFresh() ? "" : "(stale)");
+  spr.setCursor(SAFE_L, SAFE_B - 9); spr.print(t);
+}
+
+// Connected to Claude Desktop and a usage token too: one-line strip top-left.
+static void drawUsageStrip() {
+  const Palette& p = characterPalette();
+  float a = usage5h(), b = usage7d();
+  spr.setTextSize(1);
+  spr.fillRect(SAFE_L, SAFE_T + 2, 100, 9, p.bg);
+  spr.setCursor(SAFE_L, SAFE_T + 3);
+  spr.setTextColor(p.textDim, p.bg); spr.print("5h ");
+  spr.setTextColor(a < 0 ? p.textDim : _pctCol(a), p.bg);
+  if (a < 0) spr.print("--"); else spr.printf("%d%%", (int)(a + 0.5f));
+  spr.setTextColor(p.textDim, p.bg); spr.print(" wk ");
+  spr.setTextColor(b < 0 ? p.textDim : _pctCol(b), p.bg);
+  if (b < 0) spr.print("--"); else spr.printf("%d%%", (int)(b + 0.5f));
+}
+
+static bool usageHasData() { return usageConfigured() && (usage5h() >= 0 || usage7d() >= 0); }
+
+static void drawInfoBig() {
+  const Palette& p = characterPalette();
+  spr.fillRect(0, 70, W, H - 70, p.bg);
+  static const char* TITLES[] = { "ABOUT", "BUTTONS", "CLAUDE", "DEVICE", "BLUETOOTH", "WIFI", "USAGE", "CREDITS" };
+  _bigHdr(p, TITLES[infoPage < 8 ? infoPage : 7], infoPage, INFO_PAGES);
+  switch (infoPage) {
+    case 0:
+      if (ownerName()[0]) _big(p.body, p.bg, "%s's", ownerName());
+      _big(p.text, p.bg, "%s", petName());
+      _big(GREEN, p.bg, "A = approve");
+      _big(HOT, p.bg, "B = deny");
+      break;
+    case 1:
+      _big(GREEN, p.bg, "A  approve");
+      _big(HOT, p.bg, "B  deny");
+      _big(p.text, p.bg, "hold A menu");
+      _big(p.textDim, p.bg, "swipe pages");
+      break;
+    case 2:
+      _big(tama.sessionsRunning ? GREEN : p.textDim, p.bg, "run   %u", tama.sessionsRunning);
+      _big(tama.sessionsWaiting ? HOT : p.textDim, p.bg, "wait  %u", tama.sessionsWaiting);
+      _big(p.text, p.bg, "total %u", tama.sessionsTotal);
+      _big(dataConnected() ? GREEN : HOT, p.bg, "%s", dataConnected() ? (dataBtActive() ? "via BT" : "via USB") : "offline");
+      break;
+    case 3: {
+      HwBattery hb = hwBattery();
+      bool full = hb.usbPresent && hb.mV > 4100 && !hb.charging;
+      spr.setTextSize(4);
+      spr.setTextColor(hb.pct <= 15 ? HOT : hb.pct <= 40 ? 0xFE60 : GREEN, p.bg);
+      spr.setCursor(SAFE_L, _bigY); spr.printf("%d%%", hb.pct);
+      spr.setTextSize(1);
+      _bigY += 40;
+      _big(full ? GREEN : hb.charging ? HOT : p.text, p.bg, "%s", full ? "full" : hb.charging ? "charging" : hb.usbPresent ? "on USB" : "battery");
+      break;
+    }
+    case 4: {
+      bool linked = settings().bt && dataBtActive();
+      _big(linked ? GREEN : (settings().bt ? HOT : p.textDim), p.bg, "%s", linked ? "linked" : (settings().bt ? "pairing" : "off"));
+      _big(p.text, p.bg, "%s", btName);
+      break;
+    }
+    case 5: {
+      NetMode nm = netMode();
+      _big(nm == NET_STA ? GREEN : (nm == NET_OFF ? p.textDim : HOT), p.bg, "%s",
+           nm == NET_STA ? "online" : nm == NET_AP ? "hotspot" : nm == NET_CONNECTING ? "connecting" : "off");
+      if (nm == NET_STA) {
+        _big(p.text, p.bg, "%s", WiFi.localIP().toString().c_str());
+        _bigSmall(p.textDim, p.bg, "claudioscar-buddy.local");
+        _bigSmall(p.textDim, p.bg, "login buddy / pass:");
+        _big(p.text, p.bg, "%s", netApPassword());
+      } else if (nm == NET_AP) {
+        _bigSmall(p.textDim, p.bg, "password");
+        _big(p.text, p.bg, "%s", netApPassword());
+        _bigSmall(p.textDim, p.bg, "then open");
+        _big(p.text, p.bg, "192.168.4.1");
+      }
+      break;
+    }
+    case 6: {
+      if (!usageConfigured()) { _big(p.textDim, p.bg, "no token"); _bigSmall(p.textDim, p.bg, "add it on the web page"); break; }
+      char left[24];
+      float a = usage5h(), b = usage7d();
+      if (a >= 0) { _big(_pctCol(a), p.bg, "5h   %d%%", (int)(a + 0.5f)); _fmtLeft(left, sizeof(left), usage5hReset()); if (left[0]) _bigSmall(p.textDim, p.bg, "%s", left); }
+      else _big(p.textDim, p.bg, "5h   --");
+      _bigY += 4;
+      if (b >= 0) { _big(_pctCol(b), p.bg, "week %d%%", (int)(b + 0.5f)); _fmtLeft(left, sizeof(left), usage7dReset()); if (left[0]) _bigSmall(p.textDim, p.bg, "%s", left); }
+      else _big(p.textDim, p.bg, "week --");
+      if (usageError()[0]) _bigSmall(HOT, p.bg, "%.28s", usageError());
+      break;
+    }
+    default:
+      _big(p.body, p.bg, "claudioscar");
+      _big(p.text, p.bg, "buddy");
+      _big(p.textDim, p.bg, "v" FW_VERSION);
+      break;
+  }
+}
+
+static void drawPetBig(const Palette& p, bool howTo) {
+  spr.fillRect(0, 70, W, H - 70, p.bg);
+  _bigHdr(p, howTo ? "PET TIPS" : "PET", howTo ? 1 : 0, PET_PAGES);
+  if (howTo) {
+    _big(GREEN, p.bg, "fast yes");
+    _bigSmall(p.textDim, p.bg, "= happier pet");
+    _big(p.body, p.bg, "tokens");
+    _bigSmall(p.textDim, p.bg, "= food, level up");
+    _big(0x07FF, p.bg, "face down");
+    _bigSmall(p.textDim, p.bg, "= nap, energy");
+    return;
+  }
+  _big(p.body, p.bg, "Lv %u", stats().level);
+  _big(GREEN, p.bg, "yes  %u", stats().approvals);
+  _big(HOT, p.bg, "no   %u", stats().denials);
+  uint8_t mood = statsMoodTier();
+  for (int i = 0; i < 4; i++) tinyHeart(SAFE_L + 6 + i * 22, _bigY + 4, i < mood, mood >= 3 ? RED : mood >= 2 ? HOT : p.textDim);
+}
+
 void drawInfo() {
+  if (bigTextOn()) { drawInfoBig(); return; }
   const Palette& p = characterPalette();
   const int TOP = 70;
   spr.fillRect(0, TOP, W, H - TOP, p.bg);
@@ -893,6 +1081,7 @@ static void tinyHeart(int x, int y, bool filled, uint16_t col) {
 }
 
 static void drawPetStats(const Palette& p) {
+  if (bigTextOn()) { drawPetBig(p, false); return; }
   const int TOP = 70;
   spr.fillRect(0, TOP, W, H - TOP, p.bg);
   spr.setTextSize(1);
@@ -948,6 +1137,7 @@ static void drawPetStats(const Palette& p) {
 }
 
 static void drawPetHowTo(const Palette& p) {
+  if (bigTextOn()) { drawPetBig(p, true); return; }
   const int TOP = 70;
   spr.fillRect(0, TOP, W, H - TOP, p.bg);
   spr.setTextSize(1);
@@ -1107,9 +1297,8 @@ void setup() {
 void loop() {
   hwInputUpdate();
   // Night mode: dim on schedule; any tap or key press lifts it until the next night.
-  if (nightActive() && (hwTouch().justPressed || hwBtnA().wasPressed || hwBtnB().wasPressed)) {
-    nightCancel();
-    if (!screenOff && !napping) applyBrightness();
+  if (hwTouch().justPressed || hwBtnA().wasPressed || hwBtnB().wasPressed) {
+    if (nightPoke() && !screenOff && !napping) applyBrightness();
   }
   if (nightTick() && !screenOff && !napping) applyBrightness();
   ;
@@ -1279,10 +1468,12 @@ void loop() {
   // ─── Touch (additive — buttons above already handled) ──────────────
   // Clocking = idle home screen with RTC synced; drives gesture routing:
   // HUD (!clocking) gets tap-to-pet, clocking gets horizontal-swipe-to-switch-species.
-  bool tpClocking = displayMode == DISP_NORMAL
+  bool tpClocking = (displayMode == DISP_NORMAL
                  && !menuOpen && !settingsOpen && !resetOpen && !inPrompt
                  && tama.sessionsRunning == 0 && tama.sessionsWaiting == 0
-                 && dataRtcValid();
+                 && dataRtcValid())
+                 || (displayMode == DISP_NORMAL && !menuOpen && !settingsOpen && !resetOpen
+                     && !inPrompt && usageHasData() && !dataConnected());
 
   const HwTouch& tp = hwTouch();
   if (tp.justPressed) { _tpStartX = tp.x; _tpStartY = tp.y; _tpStartMs = millis(); }
@@ -1407,10 +1598,13 @@ void loop() {
   // Clock shows when Claude is idle and the RTC is synced — regardless
   // of USB power. On battery the screen still auto-offs after a longer
   // timeout (CLOCK_OFF_MS_BAT) so it doesn't drain forever.
-  bool clocking = displayMode == DISP_NORMAL
+  bool usageHome = displayMode == DISP_NORMAL
+               && !menuOpen && !settingsOpen && !resetOpen && !inPrompt
+               && usageHasData() && !dataConnected();
+  bool clocking = (displayMode == DISP_NORMAL
                && !menuOpen && !settingsOpen && !resetOpen && !inPrompt
                && tama.sessionsRunning == 0 && tama.sessionsWaiting == 0
-               && dataRtcValid();
+               && dataRtcValid()) || usageHome;
   // Portrait-only clock on AMOLED port; landscape was removed.
   static bool wasClocking = false;
   if (clocking != wasClocking) {
@@ -1419,7 +1613,9 @@ void loop() {
       // ASCII buddy at scale 2 reaches y≈126; clock starts at y=140
       // (compact single-line layout) so peek isn't needed and the pet
       // gets to keep its full size.
-      characterSetPeek(true);
+      // Full-size GIF: the non-peek layout centres it in y 0..140, exactly
+      // the space above the clock (peek halved it and looked tiny).
+      characterSetPeek(false);
       buddySetPeek(false);
       // Clear the full canvas once on entry: buddy/clock both update
       // partial regions every frame, so any stale ink left behind from
@@ -1492,6 +1688,7 @@ void loop() {
   }
   if (!napping && !screenOff) {
     if (blePasskey()) drawPasskey();
+    else if (usageHome) drawUsageHome();
     else if (clocking) drawClock();
     else if (displayMode == DISP_INFO) drawInfo();
     else if (displayMode == DISP_PET) drawPet();
@@ -1499,6 +1696,9 @@ void loop() {
     if (!blePasskey() && (clocking || displayMode == DISP_NORMAL)
         && !menuOpen && !settingsOpen && !resetOpen)
       drawFlagBadge(SAFE_R - 22, SAFE_T + 2);
+    if (!blePasskey() && !usageHome && usageHasData() && (clocking || displayMode == DISP_NORMAL)
+        && !menuOpen && !settingsOpen && !resetOpen)
+      drawUsageStrip();
     drawAngry();
     if (resetOpen) drawReset();
     else if (settingsOpen) drawSettings();

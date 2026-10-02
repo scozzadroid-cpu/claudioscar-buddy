@@ -42,6 +42,7 @@ button.small{padding:5px 10px;font-size:13px;margin:0 4px 0 0}
 <label>Species</label><select id="species"></select>
 <label>Brightness <span id="bv"></span></label><input type="range" id="bright" min="0" max="4">
 <label>Corner flag</label><select id="flag"><option value="0">none</option><option value="1">Palestine</option><option value="2">Italy</option></select>
+<div class="chk"><input type="checkbox" id="bigText">Large text (fewer details, bigger letters)</div>
 <div class="chk"><input type="checkbox" id="hud">Show transcript</div>
 <div class="chk"><input type="checkbox" id="led">Attention indicator</div>
 <button onclick="save()">Save</button>
@@ -53,8 +54,9 @@ button.small{padding:5px 10px;font-size:13px;margin:0 4px 0 0}
 <div style="display:flex;gap:10px"><div style="flex:1"><label>From</label><input type="time" id="nightStart"></div>
 <div style="flex:1"><label>Until</label><input type="time" id="nightEnd"></div></div>
 <label>Night brightness <span id="nlv"></span></label><input type="range" id="nightLevel" min="1" max="80">
+<label>A tap wakes it for</label><select id="nightWake"><option value="30">30 s</option><option value="60">1 min</option><option value="120">2 min</option><option value="300">5 min</option></select>
 <div class="chk"><input type="checkbox" id="nightMute">Mute sounds at night</div>
-<div class="sub">A tap on the buddy (or a key) brings full brightness back until the next night.
+<div class="sub">A tap on the buddy (or a key) brightens it for that long — every touch extends it — then it dims again until morning.
 Needs the clock set: use <i>Sync clock</i> under Device once.</div>
 <button onclick="save()">Save</button>
 </section>
@@ -148,7 +150,7 @@ function fill(){
   $('species').value=S.species;$('bright').value=S.bright;$('flag').value=S.flag;
   $('hud').checked=S.hud;$('led').checked=S.led;$('sound').checked=S.sound;
   $('theme').value=S.theme;$('volume').value=S.volume;$('angry').value=S.angry;
-  $('phrases').value=S.phrases.split('|').join('\n');$('otaAuto').checked=S.ota.auto;const n=S.night||{};$('nightOn').checked=n.on;$('nightStart').value=n.start;$('nightEnd').value=n.end;$('nightLevel').value=n.level;$('nightMute').checked=n.mute;$('upoll').value=String(S.usage.poll);
+  $('phrases').value=S.phrases.split('|').join('\n');$('otaAuto').checked=S.ota.auto;const n=S.night||{};$('nightOn').checked=n.on;$('nightStart').value=n.start;$('nightEnd').value=n.end;$('nightLevel').value=n.level;$('nightMute').checked=n.mute;$('nightWake').value=String(n.wake||60);$('bigText').checked=!!S.bigText;$('upoll').value=String(S.usage.poll);
   ['bright','volume','angry','nightLevel'].forEach(k=>{$(k).oninput=lbl;});lbl();
 }
 function lbl(){$('bv').textContent=$('bright').value+'/4';$('vv').textContent=$('volume').value;$('av').textContent=$('angry').value;$('nlv').textContent=$('nightLevel').value}
@@ -156,7 +158,7 @@ async function load(first){try{S=await api('/api/status');if(first)fill();render
 async function save(){
   const b={pet:$('pet').value,owner:$('owner').value,species:+$('species').value,bright:+$('bright').value,
     flag:+$('flag').value,hud:$('hud').checked,led:$('led').checked,sound:$('sound').checked,
-    theme:+$('theme').value,pack:$('pack').value,nightOn:$('nightOn').checked,nightStart:$('nightStart').value,nightEnd:$('nightEnd').value,nightLevel:+$('nightLevel').value,nightMute:$('nightMute').checked,volume:+$('volume').value,angry:+$('angry').value,
+    theme:+$('theme').value,pack:$('pack').value,nightOn:$('nightOn').checked,nightStart:$('nightStart').value,nightEnd:$('nightEnd').value,nightLevel:+$('nightLevel').value,nightMute:$('nightMute').checked,nightWake:+$('nightWake').value,bigText:$('bigText').checked,volume:+$('volume').value,angry:+$('angry').value,
     phrases:$('phrases').value.split('\n').map(s=>s.trim()).filter(Boolean).join('|')};
   try{await post('/api/settings',b);toast('Saved');load()}catch(e){toast('Error: '+e.message)}
 }

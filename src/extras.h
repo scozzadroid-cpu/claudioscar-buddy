@@ -20,9 +20,11 @@ struct ExtraSettings {
   uint16_t nightEnd;
   uint8_t  nightLevel; // raw panel brightness at night (1..80)
   bool     nightMute;  // no sounds while night mode is active
+  uint16_t nightWake;  // seconds a tap keeps the screen bright at night
+  bool     bigText;    // large-text info/pet pages with only the key values
 };
 
-static ExtraSettings _xs = { THEME_MEME, 80, 50, FLAG_PALESTINE, false, 23 * 60, 7 * 60, 6, true };
+static ExtraSettings _xs = { THEME_MEME, 80, 50, FLAG_PALESTINE, false, 23 * 60, 7 * 60, 6, true, 60, false };
 
 static const char* DEFAULT_PHRASES =
   "porco dio!|dio cane!|porca madonna!|dio porco!|madonna maiala!|"
@@ -54,6 +56,8 @@ inline void extrasLoad() {
   _xs.nightEnd   = pr.getUShort("n_end", 7 * 60) % 1440;
   _xs.nightLevel = constrain(pr.getUChar("n_lvl", 6), 1, 80);
   _xs.nightMute  = pr.getBool("n_mute", true);
+  _xs.nightWake  = constrain(pr.getUShort("n_wake", 60), 10, 900);
+  _xs.bigText    = pr.getBool("x_big", false);
   if (pr.isKey("x_spack")) pr.getString("x_spack", _soundPack, sizeof(_soundPack));
   if (pr.isKey("x_phr")) pr.getString("x_phr", _phrases, sizeof(_phrases));
   else strncpy(_phrases, DEFAULT_PHRASES, sizeof(_phrases) - 1);
@@ -77,6 +81,8 @@ inline void extrasSave() {
   pr.putUShort("n_end", _xs.nightEnd);
   pr.putUChar("n_lvl", _xs.nightLevel);
   pr.putBool("n_mute", _xs.nightMute);
+  pr.putUShort("n_wake", _xs.nightWake);
+  pr.putBool("x_big", _xs.bigText);
   pr.putString("x_phr", _phrases);
   pr.putString("x_spack", _soundPack);
   pr.end();
@@ -286,10 +292,12 @@ void sfxTest(uint8_t ev) {
 // ---------------------------------------------------------------- night mode
 
 // Between nightStart and nightEnd (local time from the RTC) the panel drops
-// to nightLevel. A tap or key press cancels it until the next night; the
+// to nightLevel. A tap or key press brightens it for nightWake seconds
+// (each further touch extends that), then it dims again until morning. The
 // schedule needs a valid clock (synced from Claude Desktop, the web page,
 // or NTP once the timezone is known).
-static bool _nightCancelled = false;
+static uint32_t _nightWakeUntil = 0;
+static bool     _nightAwake = false;
 
 static bool _nightWindow() {
   if (!_xs.nightOn || _xs.nightStart == _xs.nightEnd) return false;
@@ -299,23 +307,28 @@ static bool _nightWindow() {
                                        : (m >= _xs.nightStart || m < _xs.nightEnd);
 }
 
-bool nightActive() { return _nightWindow() && !_nightCancelled; }
+bool nightActive() { return _nightWindow() && !_nightAwake; }
 uint8_t nightLevel() { return _xs.nightLevel; }
 
 // Call once per frame. Returns true when the night state flipped so the
 // caller re-applies brightness.
 inline bool nightTick() {
   static bool was = false;
-  if (!_nightWindow()) _nightCancelled = false;  // re-arm for the next night
+  if (_nightAwake && (int32_t)(millis() - _nightWakeUntil) >= 0) _nightAwake = false;  // back to sleep
   bool now = nightActive();
   bool changed = now != was;
   was = now;
   return changed;
 }
 
-// Tap / key while dimmed: back to normal until the next night starts.
-inline bool nightCancel() {
-  if (!nightActive()) return false;
-  _nightCancelled = true;
-  return true;
+// Tap / key inside the night window: bright for nightWake seconds. Returns
+// true if the screen was dimmed (caller re-applies brightness).
+inline bool nightPoke() {
+  if (!_nightWindow()) return false;
+  bool wasDim = !_nightAwake;
+  _nightAwake = true;
+  _nightWakeUntil = millis() + (uint32_t)_xs.nightWake * 1000UL;
+  return wasDim;
 }
+
+inline bool bigTextOn() { return _xs.bigText; }
