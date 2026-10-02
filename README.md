@@ -130,9 +130,7 @@ the hotspot password survive updates.
 `claudioscar-buddy-ota-<env>.bin` from the Releases page yourself (handy
 without internet). Files that aren't a valid app image are rejected.
 
-Publishing an update: bump `custom_fw_version` in `platformio.ini`, build, and
-attach each environment's `.pio/build/<env>/firmware.bin` to a GitHub release
-tagged `v<version>`, named `claudioscar-buddy-ota-<env>.bin`.
+Publishing an update: `tools/release.sh <version> [title] [notes.md]` builds every board, packages the full and OTA images and creates the GitHub release. Updated buddies confirm the new firmware after 30 s of running; if it crashes or reboots before that, they roll back to the previous version automatically.
 
 ## microSD card (optional)
 

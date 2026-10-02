@@ -14,6 +14,14 @@
 #include <HTTPClient.h>
 #include <NetworkClientSecure.h>
 #include <Update.h>
+#include <esp_ota_ops.h>
+
+// Rollback safety: the core would mark a freshly updated image valid as soon
+// as it boots. Defer that until the new firmware has run for OTA_CONFIRM_MS;
+// if it crashes or reboots before, the bootloader falls back to the previous
+// image on its own.
+extern "C" bool verifyRollbackLater() { return true; }
+static const uint32_t OTA_CONFIRM_MS = 30000;
 
 #ifndef OTA_REPO
   #define OTA_REPO ""
@@ -86,7 +94,12 @@ static void _otaCheck() {
   http.setUserAgent("claudioscar-buddy/" FW_VERSION);
   http.addHeader("Accept", "application/vnd.github+json");
   int code = http.GET();
-  if (code != 200) { char b[48]; snprintf(b, sizeof(b), "release check failed (HTTP %d)", code); _otaFail(b); http.end(); return; }
+  if (code != 200) {
+    char b[64];
+    if (code < 0) snprintf(b, sizeof(b), "release check failed (%s)", http.errorToString(code).c_str());
+    else snprintf(b, sizeof(b), "release check failed (HTTP %d)", code);
+    _otaFail(b); http.end(); return;
+  }
 
   // Keep only what we need out of a potentially large response.
   JsonDocument filter;
@@ -131,6 +144,7 @@ static void _otaInstall() {
   _otaPct = 0;
   hwAudioStop();
   wake();
+  characterClose();   // mbedTLS uses internal RAM only: free what we can first
   char line[24]; snprintf(line, sizeof(line), "v%s", _otaLatest);
   _otaDrawProgress(line);
 
@@ -141,10 +155,11 @@ static void _otaInstall() {
   http.begin(tls, _otaUrl);
   http.setUserAgent("claudioscar-buddy/" FW_VERSION);
   int code = http.GET();
-  if (code != 200) { char b[48]; snprintf(b, sizeof(b), "download failed (HTTP %d)", code); _otaFail(b); http.end(); characterInvalidate(); return; }
+  if (code != 200) { char b[48]; snprintf(b, sizeof(b), "download failed (HTTP %d)", code); _otaFail(b); http.end(); characterInit(nullptr); characterInvalidate(); return; }
   int len = http.getSize();
-  Serial.printf("[ota] downloading %d bytes, heap %u\n", len, ESP.getFreeHeap());
-  if (len <= 0 || !Update.begin(len, U_FLASH)) { _otaFail("not enough space for update"); http.end(); characterInvalidate(); return; }
+  Serial.printf("[ota] downloading %d bytes, heap %u, largest block %u\n", len, ESP.getFreeHeap(),
+                (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL));
+  if (len <= 0 || !Update.begin(len, U_FLASH)) { _otaFail("not enough space for update"); http.end(); characterInit(nullptr); characterInvalidate(); return; }
 
   NetworkClient* s = http.getStreamPtr();
   static uint8_t buf[2048];
@@ -165,6 +180,7 @@ static void _otaInstall() {
   if (got != len || !Update.end(true)) {
     Update.abort();
     _otaFail(Update.hasError() ? Update.errorString() : "download interrupted");
+    characterInit(nullptr);
     characterInvalidate();
     return;
   }
@@ -181,6 +197,16 @@ void otaRequestInstall() { _otaInstallNow = true; }
 // Call from loop(); does the slow network work outside the web handler so
 // the HTTP reply goes out before the download starts.
 inline void otaLoop() {
+  static bool confirmed = false;
+  if (!confirmed && millis() > OTA_CONFIRM_MS) {
+    confirmed = true;
+    esp_ota_img_states_t st;
+    const esp_partition_t* run = esp_ota_get_running_partition();
+    if (esp_ota_get_state_partition(run, &st) == ESP_OK && st == ESP_OTA_IMG_PENDING_VERIFY) {
+      esp_ota_mark_app_valid_cancel_rollback();
+      Serial.println("[ota] new firmware confirmed");
+    }
+  }
   static bool wasLinked = false;
   bool linked = netMode() == NET_STA;
   uint32_t now = millis();

@@ -23,6 +23,7 @@ static uint32_t _uLastOkMs = 0, _uLastTryMs = 0;
 static bool     _uPollNow = false;
 static char     _uErr[48] = "";
 static char     _uVia[12] = "";
+static uint32_t _uSkipEndpointUntil = 0;   // back off the usage endpoint after a failure (it 429s a lot)
 
 inline bool usageConfigured() { return _uTok[0] != 0; }
 inline float usage5h() { return _u5h; }
@@ -102,8 +103,17 @@ static bool _uFetchUsageEndpoint() {
   http.addHeader("anthropic-beta", "oauth-2025-04-20");
   http.setUserAgent("claudioscar-buddy/" FW_VERSION);
   int code = http.GET();
-  if (code != 200) { http.end(); Serial.printf("[usage] usage endpoint HTTP %d\n", code); return false; }
+  if (code != 200) {
+    http.end();
+    Serial.printf("[usage] usage endpoint HTTP %d, using headers for 6 h\n", code);
+    _uSkipEndpointUntil = millis() + 6UL * 3600UL * 1000UL;
+    return false;
+  }
   JsonDocument filter;
+  // Newer shape: limits[] {id: session|weekly_all|..., percent, resets_at}.
+  filter["limits"][0]["id"] = true;
+  filter["limits"][0]["percent"] = true;
+  filter["limits"][0]["resets_at"] = true;
   filter["five_hour"]["utilization"] = true;
   filter["five_hour"]["resets_at"] = true;
   filter["seven_day"]["utilization"] = true;
@@ -111,7 +121,15 @@ static bool _uFetchUsageEndpoint() {
   JsonDocument d;
   DeserializationError e = deserializeJson(d, http.getStream(), DeserializationOption::Filter(filter));
   http.end();
-  if (e || d["five_hour"].isNull()) return false;
+  if (e) return false;
+  bool got = false;
+  for (JsonObject l : d["limits"].as<JsonArray>()) {
+    const char* id = l["id"] | "";
+    if (!strcmp(id, "session"))    { _u5h = l["percent"] | -1.0f; _u5hReset = _uIso(l["resets_at"] | ""); got = true; }
+    if (!strcmp(id, "weekly_all")) { _u7d = l["percent"] | -1.0f; _u7dReset = _uIso(l["resets_at"] | ""); got = true; }
+  }
+  if (got) { strcpy(_uVia, "usage"); return _u5h >= 0 || _u7d >= 0; }
+  if (d["five_hour"].isNull()) return false;
   // This endpoint reports utilization in percent (0-100).
   _u5h = d["five_hour"]["utilization"] | -1.0f;
   _u7d = d["seven_day"]["utilization"] | -1.0f;
@@ -160,7 +178,8 @@ static bool _uFetchHeaders() {
 static void _uPoll() {
   _uLastTryMs = millis();
   if (netMode() != NET_STA) { _uSetErr("needs a home WiFi connection"); return; }
-  bool ok = _uFetchUsageEndpoint() || _uFetchHeaders();
+  bool tryEndpoint = !_uSkipEndpointUntil || (int32_t)(millis() - _uSkipEndpointUntil) >= 0;
+  bool ok = (tryEndpoint && _uFetchUsageEndpoint()) || _uFetchHeaders();
   if (ok) {
     _uErr[0] = 0;
     _uLastOkMs = millis();
