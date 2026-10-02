@@ -114,6 +114,8 @@ The schedule follows the buddy's clock, so sync it once (Device → *Sync
 clock*, or let Claude Desktop do it). Once the buddy is on your WiFi it keeps
 the clock right via NTP, using the timezone from the last sync.
 
+After a power loss (the RTC has no backup cell) the buddy restores the last time it saved — every 10 minutes to `/buddy/clock.txt` on the SD card, or to flash without one — so night mode keeps roughly working until a real sync arrives.
+
 ## Claude usage (Pro/Max)
 
 The **CLAUDE USAGE** info page (and the web page) show your plan's 5-hour and

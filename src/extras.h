@@ -4,6 +4,8 @@
 #pragma once
 #include <Preferences.h>
 #include "hw/audio.h"
+#include <SD_MMC.h>
+#include "hw/rtc.h"
 
 // ---------------------------------------------------------------- settings
 
@@ -332,3 +334,69 @@ inline bool nightPoke() {
 }
 
 inline bool bigTextOn() { return _xs.bigText; }
+
+// ---------------------------------------------------------------- fake hwclock
+
+// Like fake-hwclock on a Raspberry Pi: the PCF85063 keeps time across
+// reboots but not across a power loss, so every 10 minutes the current local
+// time is saved (microSD /buddy/clock.txt, or NVS without a card) and
+// restored at boot when the RTC came up empty. A restored time is behind by
+// however long the buddy was off — good enough for night mode until NTP,
+// Claude Desktop or the web page provide the real time.
+
+static uint32_t _civilToEpoch(uint16_t Y, uint8_t Mo, uint8_t D, uint8_t h, uint8_t mi, uint8_t se) {
+  int y = Y - (Mo <= 2);
+  int era = (y >= 0 ? y : y - 399) / 400;
+  unsigned yoe = (unsigned)(y - era * 400);
+  unsigned doy = (153 * (Mo + (Mo > 2 ? -3 : 9)) + 2) / 5 + D - 1;
+  unsigned doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+  return (uint32_t)((era * 146097L + (long)doe - 719468L) * 86400L + h * 3600L + mi * 60L + se);
+}
+
+static void _clockSave(uint32_t localEpoch) {
+  char b[16]; snprintf(b, sizeof(b), "%lu", (unsigned long)localEpoch);
+  if (hwSdMounted()) {
+    SD_MMC.mkdir("/buddy");
+    File f = SD_MMC.open("/buddy/clock.txt", FILE_WRITE);
+    if (f) { f.print(b); f.close(); return; }
+  }
+  Preferences pr; pr.begin("buddy_hw", false); pr.putULong("clk", localEpoch); pr.end();
+}
+
+static uint32_t _clockLoad() {
+  uint32_t e = 0;
+  if (hwSdMounted()) {
+    File f = SD_MMC.open("/buddy/clock.txt");
+    if (f) { e = (uint32_t)f.readString().toInt(); f.close(); }
+  }
+  if (!e) { Preferences pr; pr.begin("buddy_hw", true); e = pr.getULong("clk", 0); pr.end(); }
+  return e;
+}
+
+// At boot. Returns 2 if the RTC still had the time, 1 if it was restored
+// (approximately) from the saved copy, 0 if there's no time at all.
+inline uint8_t clockRestoreAtBoot() {
+  HwTime t;
+  if (hwRtcRead(&t) && t.Y >= 2025 && t.Y < 2100) return 2;
+  uint32_t e = _clockLoad();
+  if (e < 1735689600UL) return 0;                 // nothing saved (before 2025)
+  time_t tt = (time_t)e;
+  struct tm lt; gmtime_r(&tt, &lt);
+  HwTime w;
+  w.H = lt.tm_hour; w.M = lt.tm_min; w.S = lt.tm_sec;
+  w.Y = lt.tm_year + 1900; w.Mo = lt.tm_mon + 1; w.D = lt.tm_mday; w.dow = lt.tm_wday;
+  hwRtcWrite(w);
+  Serial.printf("[clock] RTC was empty, restored %04u-%02u-%02u %02u:%02u from %s copy\n",
+                w.Y, w.Mo, w.D, w.H, w.M, hwSdMounted() ? "SD" : "flash");
+  return 1;
+}
+
+// Call from loop(): saves the clock every 10 minutes while it looks valid.
+inline void clockSaveLoop() {
+  static uint32_t last = 0;
+  if (last && millis() - last < 10UL * 60UL * 1000UL) return;
+  HwTime t;
+  if (!hwRtcRead(&t) || t.Y < 2025 || t.Y >= 2100) return;
+  last = millis();
+  _clockSave(_civilToEpoch(t.Y, t.Mo, t.D, t.H, t.M, t.S));
+}

@@ -1287,6 +1287,10 @@ void setup() {
     sfxPlay(SFX_BOOT);
     delay(1800);
   }
+  // RTC kept the time across a reboot -> trust it right away (the clock
+  // face used to wait for a sync even then). Empty after a power loss ->
+  // restore the last saved time (approximate, not marked as synced).
+  if (clockRestoreAtBoot() == 2) _rtcValid = true;
   otaLoadPrefs();
   usageLoad();
   netBegin();
@@ -1308,6 +1312,7 @@ void loop() {
   dataPoll(&tama);
   netLoop();
   otaLoop();
+  clockSaveLoop();
   usageLoop();
   if (statsPollLevelUp()) { triggerOneShot(P_CELEBRATE, 3000); sfxPlay(SFX_CELEBRATE); }
   baseState = derive(tama);
